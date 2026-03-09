@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "ouroboros"
+version = "0.1.0"
+description = "A friendly Rust CLI tool"
+requires-python = ">=3.8"
+
+[tool.maturin]
+# Build as a binary (not a Python module)
+bindings = "bin"
+# Point to the CLI crate within the Cargo workspace
+manifest-path = "crates/ouroboros-cli/Cargo.toml"

@@ -1,0 +1,26 @@
+---
+description: Keeping the test fixture generation script in sync with new features
+globs: crates/ouroboros-core/src/**,crates/ouroboros-cli/src/**
+---
+
+# Fixture Generation Script
+
+The file [fixtures/generate.py](mdc:fixtures/generate.py) generates a sample Python project under `fixtures/sample_project/` for testing ouroboros.
+
+## When to update
+
+Whenever a new feature is added to ouroboros-core or ouroboros-cli that changes what inputs the tool expects from a project (config files, directory layout, file conventions, etc.), the generate script must be updated so the sample project exercises the new feature.
+
+Examples of changes that require an update:
+
+- New keys added to the `oboros.toml` config schema ([config.rs](mdc:crates/ouroboros-core/src/config.rs))
+- New file types scanned (e.g. `.pyi` support)
+- New directory conventions (e.g. namespace packages, test directories)
+- New exclude/include patterns
+
+## How the script works
+
+- `BASE_FILES` dict defines the hand-crafted ~30 file skeleton
+- `_generate_scaled_files()` procedurally adds more files when `--scale > 1`
+- The `generate()` function writes all files plus `oboros.toml` into `fixtures/sample_project/`
+- The `oboros.toml` config is written at the end of `generate()` and should reflect the current config schema
