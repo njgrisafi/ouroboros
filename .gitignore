@@ -1,3 +1,5 @@
 /target
 fixtures/sample_project/
 .plans
+.sisyphus
+.opencode

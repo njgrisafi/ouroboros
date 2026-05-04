@@ -125,7 +125,7 @@ mod tests {
     fn make_graph(edges: &[(&str, &[&str])]) -> FileDependencyGraph {
         let mut graph = FileDependencyGraph::new();
         for (node, deps) in edges {
-            let dep_set: BTreeSet<PathBuf> = deps.iter().map(|d| PathBuf::from(d)).collect();
+            let dep_set: BTreeSet<PathBuf> = deps.iter().map(PathBuf::from).collect();
             graph.insert(PathBuf::from(node), dep_set);
         }
         graph
@@ -134,11 +134,7 @@ mod tests {
     // Test 1: acyclic chain — no cycles.
     #[test]
     fn acyclic_chain() {
-        let graph = make_graph(&[
-            ("a.py", &["b.py"]),
-            ("b.py", &["c.py"]),
-            ("c.py", &[]),
-        ]);
+        let graph = make_graph(&[("a.py", &["b.py"]), ("b.py", &["c.py"]), ("c.py", &[])]);
 
         let sccs = strongly_connected_components(&graph);
         assert_eq!(sccs.len(), 3);
@@ -252,10 +248,7 @@ mod tests {
         // SCCs should be sorted by first member.
         assert_eq!(sccs[0], vec![PathBuf::from("a.py")]);
         assert_eq!(sccs[1], vec![PathBuf::from("m.py")]);
-        assert_eq!(
-            sccs[2],
-            vec![PathBuf::from("y.py"), PathBuf::from("z.py")]
-        );
+        assert_eq!(sccs[2], vec![PathBuf::from("y.py"), PathBuf::from("z.py")]);
 
         let cycles = dependency_cycles(&graph);
         assert_eq!(cycles.len(), 2);

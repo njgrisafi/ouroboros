@@ -2,6 +2,11 @@ use rustpython_parser::ast::{ExceptHandler, Stmt, Suite};
 
 use super::{ImportKind, ImportedName, RawImport};
 
+/// Convert a byte offset in source to a 1-indexed line number.
+fn byte_offset_to_line(source: &[u8], offset: usize) -> u32 {
+    source[..offset].iter().filter(|&&b| b == b'\n').count() as u32 + 1
+}
+
 /// Walk a parsed module body and extract import statements.
 ///
 /// When `include_local` is `false` (the default), only top-level statements
@@ -11,20 +16,24 @@ use super::{ImportKind, ImportedName, RawImport};
 /// When `include_local` is `true`, the walker recurses into all nested
 /// statement bodies (functions, classes, if/for/while/with/try blocks) so
 /// that function-scoped ("local") imports are also collected.
-pub(crate) fn collect_imports(body: &Suite, include_local: bool) -> Vec<RawImport> {
+pub(crate) fn collect_imports(body: &Suite, source: &str, include_local: bool) -> Vec<RawImport> {
     let mut imports = Vec::new();
-    collect_imports_recursive(body, include_local, &mut imports);
+    collect_imports_recursive(body, source, include_local, &mut imports);
     imports
 }
 
 fn collect_imports_recursive(
     body: &[Stmt],
+    source: &str,
     include_local: bool,
     imports: &mut Vec<RawImport>,
 ) {
     for stmt in body {
         match stmt {
             Stmt::Import(import_stmt) => {
+                let offset = u32::from(import_stmt.range.start()) as usize;
+                let line = byte_offset_to_line(source.as_bytes(), offset);
+
                 let names = import_stmt
                     .names
                     .iter()
@@ -39,16 +48,16 @@ fn collect_imports_recursive(
                     module: None,
                     names,
                     level: 0,
+                    line,
                 });
             }
             Stmt::ImportFrom(import_from) => {
+                let offset = u32::from(import_from.range.start()) as usize;
+                let line = byte_offset_to_line(source.as_bytes(), offset);
+
                 let module = import_from.module.as_ref().map(|id| id.to_string());
 
-                let level = import_from
-                    .level
-                    .as_ref()
-                    .map(|l| l.to_u32())
-                    .unwrap_or(0);
+                let level = import_from.level.as_ref().map(|l| l.to_u32()).unwrap_or(0);
 
                 let names = import_from
                     .names
@@ -64,12 +73,12 @@ fn collect_imports_recursive(
                     module,
                     names,
                     level,
+                    line,
                 });
             }
             _ if include_local => {
-                // Recurse into nested statement bodies.
                 for nested_body in nested_bodies(stmt) {
-                    collect_imports_recursive(nested_body, true, imports);
+                    collect_imports_recursive(nested_body, source, true, imports);
                 }
             }
             _ => {}
@@ -115,20 +124,18 @@ fn nested_bodies(stmt: &Stmt) -> Vec<&[Stmt]> {
 
 #[cfg(test)]
 mod tests {
-    use rustpython_parser::{ast, Parse};
+    use rustpython_parser::{Parse, ast};
 
     use super::*;
 
-    /// Helper: parse Python source and collect top-level imports only.
     fn parse_and_collect(source: &str) -> Vec<RawImport> {
         let suite = ast::Suite::parse(source, "<test>").expect("source should parse");
-        collect_imports(&suite, false)
+        collect_imports(&suite, source, false)
     }
 
-    /// Helper: parse Python source and collect all imports (including local).
     fn parse_and_collect_all(source: &str) -> Vec<RawImport> {
         let suite = ast::Suite::parse(source, "<test>").expect("source should parse");
-        collect_imports(&suite, true)
+        collect_imports(&suite, source, true)
     }
 
     #[test]
@@ -384,5 +391,22 @@ except ImportError:
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].module.as_deref(), Some("fast_impl"));
         assert_eq!(all[1].module.as_deref(), Some("slow_impl"));
+    }
+
+    #[test]
+    fn import_line_numbers() {
+        let source = "import os\nfrom sys import argv\nimport json\n";
+        let imports = parse_and_collect(source);
+        assert_eq!(imports[0].line, 1);
+        assert_eq!(imports[1].line, 2);
+        assert_eq!(imports[2].line, 3);
+    }
+
+    #[test]
+    fn import_line_numbers_with_blank_lines() {
+        let source = "import os\n\nfrom sys import argv\n";
+        let imports = parse_and_collect(source);
+        assert_eq!(imports[0].line, 1);
+        assert_eq!(imports[1].line, 3);
     }
 }

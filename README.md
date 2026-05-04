@@ -14,7 +14,14 @@ Designed for large monorepos with millions of lines of code.
 - Builds a compact file-level dependency graph
 - Detects circular dependencies via strongly connected components (SCCs)
 - Configurable SCC size filtering, local-import inclusion, and source roots
-- Human-readable CLI output
+- Human-readable output with cycles grouped by package and import line numbers
+- JSON output (`--format json`) for programmatic consumption
+- Ignore list support (`[[cycles.ignore]]` in config) to suppress known cycles
+- `--dump-ignores` to bootstrap ignore lists from detected cycles
+- `--strict` mode for CI enforcement (exit code 1 on cycles)
+- `--package` flag to filter to intra-package cycles only
+
+See [USAGE.md](USAGE.md) for full details on every flag and config option.
 
 ## Installation
 
@@ -26,7 +33,7 @@ Requires [Rust 1.85+](https://rustup.rs/).
 cargo install --path crates/ouroboros-cli
 ```
 
-The binary is called `oboros`.
+The binary is called `oboros`.  
 
 ### As a Python wheel
 
@@ -55,6 +62,12 @@ Ouroboros automatically discovers `oboros.toml` by walking upward from the curre
 
 ```bash
 oboros --config path/to/oboros.toml
+```
+
+All CLI flags:
+
+```
+oboros [--config <FILE>] [--format human|json] [--package] [--dump-ignores] [--strict]
 ```
 
 See [USAGE.md](USAGE.md) for the full configuration reference and detailed usage instructions.

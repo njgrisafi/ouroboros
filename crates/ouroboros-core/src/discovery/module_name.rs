@@ -40,10 +40,7 @@ mod tests {
 
     #[test]
     fn simple_file() {
-        assert_eq!(
-            module_name_for_path(&PathBuf::from("app.py")),
-            "app"
-        );
+        assert_eq!(module_name_for_path(&PathBuf::from("app.py")), "app");
     }
 
     #[test]
@@ -72,9 +69,6 @@ mod tests {
 
     #[test]
     fn root_init() {
-        assert_eq!(
-            module_name_for_path(&PathBuf::from("__init__.py")),
-            ""
-        );
+        assert_eq!(module_name_for_path(&PathBuf::from("__init__.py")), "");
     }
 }

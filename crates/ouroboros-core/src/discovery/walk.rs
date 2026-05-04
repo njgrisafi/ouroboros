@@ -35,12 +35,13 @@ fn collect_python_files(
     })?;
 
     // Collect and sort entries for deterministic traversal order.
-    let mut sorted_entries: Vec<_> = entries
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| DiscoveryError::Walk {
-            root: root.to_path_buf(),
-            source: e,
-        })?;
+    let mut sorted_entries: Vec<_> =
+        entries
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| DiscoveryError::Walk {
+                root: root.to_path_buf(),
+                source: e,
+            })?;
     sorted_entries.sort_by_key(|e| e.file_name());
 
     for entry in sorted_entries {
@@ -52,14 +53,13 @@ fn collect_python_files(
 
         if file_type.is_dir() {
             collect_python_files(root, &path, out)?;
-        } else if file_type.is_file() {
-            if let Some(ext) = path.extension() {
-                if ext == "py" {
-                    // Unwrap is safe: `path` is under `root` by construction.
-                    let rel = path.strip_prefix(root).expect("path is under root");
-                    out.push(rel.to_path_buf());
-                }
-            }
+        } else if file_type.is_file()
+            && let Some(ext) = path.extension()
+            && ext == "py"
+        {
+            // Unwrap is safe: `path` is under `root` by construction.
+            let rel = path.strip_prefix(root).expect("path is under root");
+            out.push(rel.to_path_buf());
         }
     }
 
@@ -84,12 +84,7 @@ mod tests {
 
     #[test]
     fn finds_py_files() {
-        let tmp = make_tree(&[
-            "app.py",
-            "core/__init__.py",
-            "core/engine.py",
-            "readme.md",
-        ]);
+        let tmp = make_tree(&["app.py", "core/__init__.py", "core/engine.py", "readme.md"]);
         let files = walk_python_files(tmp.path()).unwrap();
         assert_eq!(
             files,
@@ -116,12 +111,7 @@ mod tests {
 
     #[test]
     fn deterministic_order() {
-        let tmp = make_tree(&[
-            "z.py",
-            "a.py",
-            "m/b.py",
-            "m/a.py",
-        ]);
+        let tmp = make_tree(&["z.py", "a.py", "m/b.py", "m/a.py"]);
         let files = walk_python_files(tmp.path()).unwrap();
         assert_eq!(
             files,

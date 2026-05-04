@@ -4,10 +4,7 @@ use std::path::PathBuf;
 #[derive(Debug)]
 pub enum DiscoveryError {
     /// A configured source root does not exist or is not a directory.
-    InvalidSourceRoot {
-        path: PathBuf,
-        reason: String,
-    },
+    InvalidSourceRoot { path: PathBuf, reason: String },
     /// An I/O error occurred while walking a directory tree.
     Walk {
         root: PathBuf,

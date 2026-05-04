@@ -2,15 +2,19 @@
 
 ## CLI
 
-The binary is called `oboros`. It accepts a single optional flag:
+The binary is called `oboros`. Usage:
 
 ```
-oboros [--config <FILE>]
+oboros [--config <FILE>] [--format human|json] [--package] [--dump-ignores] [--strict]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--config <FILE>` | Path to an `oboros.toml` config file. If omitted, Ouroboros walks upward from the current directory to find one. |
+| `--format <FORMAT>` | Output format: `human` (default) or `json`. When `json`, all verbose intermediate output is suppressed and a single JSON object is emitted to stdout. |
+| `--package` | Only report cycles where all files belong to the same top-level package. Cross-package cycles are excluded. See [Intra-package filtering](#intra-package-filtering---package). |
+| `--dump-ignores` | Print ignore entries for all detected cycles, then exit. With `--format human` (default), prints TOML fragments. With `--format json`, prints a JSON object. |
+| `--strict` | Exit with code 1 if any (non-suppressed) cycles are detected. Works with both output formats. |
 
 If no config file is found, built-in defaults are used (source root: `src`, top-level imports only, minimum SCC size: 2).
 
@@ -104,6 +108,32 @@ min-scc-size = 2
 max-scc-size = 5
 ```
 
+#### `[[cycles.ignore]]` entries
+
+Suppress known cycles so they do not appear in output or trigger `--strict` failures. Each entry lists the exact set of files forming the cycle, with an optional `reason`.
+
+```toml
+[[cycles.ignore]]
+files = ["pkg/a.py", "pkg/b.py"]
+reason = "known cycle, tracked in PROJ-123"
+
+[[cycles.ignore]]
+files = ["pkg/x.py", "pkg/y.py", "pkg/z.py"]
+reason = "refactor planned for Q3"
+```
+
+The `files` list must match a detected cycle exactly (same set of paths, order does not matter). If an ignore entry does not match any detected cycle, Ouroboros prints a warning to stderr.
+
+Use `--dump-ignores` to bootstrap ignore entries from currently detected cycles:
+
+```bash
+# Print TOML fragments you can paste into oboros.toml
+oboros --dump-ignores
+
+# Or get JSON for scripting
+oboros --dump-ignores --format json
+```
+
 ---
 
 ## Output
@@ -172,20 +202,136 @@ pkg/a.py
 
 ### Dependency cycles
 
-SCCs that pass the configured size filter:
+SCCs that pass the configured size filter, grouped by top-level package. Each file shows the line numbers where cycle-participating imports occur.
 
 ```
---- dependency cycles (2) ---
+--- dependency cycles (3) ---
+(1 cycles suppressed by ignore list)
+
+package: pkg (2 cycles)
 
 cycle 1 (3 files)
-  pkg/a.py
-  pkg/b.py
-  pkg/c.py
+  pkg/a.py (imports at lines 12, 45)
+  pkg/b.py (import at line 8)
+  pkg/c.py (import at line 3)
 
 cycle 2 (2 files)
-  pkg/x.py
-  pkg/y.py
+  pkg/x.py (import at line 5)
+  pkg/y.py (import at line 11)
+
+(cross-package: pkg, lib) (1 cycle)
+
+cycle 3 (2 files)
+  pkg/foo.py (import at line 7)
+  lib/bar.py (import at line 14)
 ```
+
+Cycles are sorted by package name, then by size. When `--package` is active, only intra-package cycles (single package group) are shown.
+
+### JSON output (`--format json`)
+
+When `--format json` is used, all verbose sections above are suppressed and a single JSON object is printed to stdout:
+
+```json
+{
+  "version": 1,
+  "summary": {
+    "cycles_reported": 2,
+    "cycles_suppressed": 1
+  },
+  "cycles": [
+    {
+      "index": 1,
+      "packages": ["pkg"],
+      "size": 3,
+      "files": [
+        {
+          "path": "pkg/a.py",
+          "import_lines": [12, 45],
+          "edges": [
+            { "to": "pkg/b.py", "lines": [12] },
+            { "to": "pkg/c.py", "lines": [45] }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | integer | Schema version (always `1`). |
+| `summary.cycles_reported` | integer | Number of cycles in the `cycles` array. |
+| `summary.cycles_suppressed` | integer | Number of cycles suppressed by the ignore list. |
+| `cycles[].index` | integer | 1-based cycle index. |
+| `cycles[].packages` | array of strings | Sorted list of top-level packages involved in the cycle (e.g. `["pkg"]` for intra-package, `["lib", "pkg"]` for cross-package). |
+| `cycles[].size` | integer | Number of files in the cycle. |
+| `cycles[].files[].path` | string | Relative file path. |
+| `cycles[].files[].import_lines` | array of integers | Sorted line numbers of imports to other cycle members. |
+| `cycles[].files[].edges[].to` | string | Import target path within the cycle. |
+| `cycles[].files[].edges[].lines` | array of integers | Sorted line numbers for that specific edge. |
+
+Pipe to `jq` for filtering:
+
+```bash
+oboros --format json | jq '.cycles | length'
+oboros --format json | jq '.cycles[] | select(.size > 3)'
+```
+
+Warnings and errors still go to stderr regardless of format.
+
+---
+
+## Intra-package filtering (`--package`)
+
+By default, Ouroboros reports all cycles regardless of which packages the files belong to. The `--package` flag restricts output to cycles where every file shares the same top-level package directory.
+
+A file's top-level package is its first path component (e.g. `pkg/sub/a.py` belongs to package `pkg`). Files at the root level (no subdirectory) have no package.
+
+This is useful in large monorepos where cross-package cycles are tracked separately or owned by different teams, and you want to focus on cycles within a single package.
+
+```bash
+# Show only cycles internal to a single package
+oboros --package
+
+# Combine with --strict for CI: fail only on intra-package cycles
+oboros --package --strict
+```
+
+---
+
+## Practical examples
+
+### CI gate: fail on any new cycles
+
+```bash
+oboros --strict
+```
+
+Exit code 1 if any non-suppressed cycles exist. Add `[[cycles.ignore]]` entries for known cycles to avoid false positives.
+
+### Bootstrap an ignore list for an existing project
+
+```bash
+oboros --dump-ignores >> oboros.toml
+```
+
+Appends TOML `[[cycles.ignore]]` fragments for every detected cycle. Edit the `reason` fields, then future runs will suppress those cycles.
+
+### JSON report filtered by package
+
+```bash
+oboros --format json --package | jq '.cycles[] | select(.size > 3)'
+```
+
+### Focus on small, actionable cycles within each package
+
+```bash
+oboros --package --strict
+```
+
+Combined with `max-scc-size` in config, this targets small intra-package tangles that are easiest to fix first.
 
 ---
 
