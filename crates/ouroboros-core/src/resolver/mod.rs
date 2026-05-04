@@ -25,6 +25,8 @@ pub struct ResolvedDep {
     pub source: String,
     /// The first-party module being depended on.
     pub target: String,
+    /// The 1-indexed line number of the import statement.
+    pub line: u32,
 }
 
 /// An import that could not be resolved to a first-party module.
@@ -108,11 +110,20 @@ pub fn resolve_all(
 
     // Deduplicate deps (same source→target edge may appear from multiple
     // import statements).
-    all_deps.sort_by(|a, b| a.source.cmp(&b.source).then(a.target.cmp(&b.target)));
+    all_deps.sort_by(|a, b| {
+        a.source
+            .cmp(&b.source)
+            .then(a.target.cmp(&b.target))
+            .then(a.line.cmp(&b.line))
+    });
     all_deps.dedup();
 
     // Deduplicate unresolved imports.
-    all_unresolved.sort_by(|a, b| a.source.cmp(&b.source).then(a.import_path.cmp(&b.import_path)));
+    all_unresolved.sort_by(|a, b| {
+        a.source
+            .cmp(&b.source)
+            .then(a.import_path.cmp(&b.import_path))
+    });
     all_unresolved.dedup();
 
     ResolveResult {

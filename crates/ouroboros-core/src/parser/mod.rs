@@ -45,6 +45,8 @@ pub struct RawImport {
     ///
     /// `0` for absolute imports, `1` for `from .`, `2` for `from ..`, etc.
     pub level: u32,
+    /// The 1-indexed line number of this import statement in the source file.
+    pub line: u32,
 }
 
 /// Parse Python source code and extract import statements.
@@ -65,7 +67,7 @@ pub fn extract_imports(source: &str, include_local: bool) -> Result<Vec<RawImpor
         message: e.to_string(),
     })?;
 
-    Ok(imports::collect_imports(&suite, include_local))
+    Ok(imports::collect_imports(&suite, source, include_local))
 }
 
 #[cfg(test)]

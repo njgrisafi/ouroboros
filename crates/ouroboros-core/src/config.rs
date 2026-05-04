@@ -62,16 +62,22 @@ pub struct ParseConfig {
     pub local_imports: bool,
 }
 
-/// Configuration for cycle (SCC) size filtering.
+#[derive(Debug, Deserialize, PartialEq, Clone)]
+pub struct IgnoredCycle {
+    pub files: Vec<String>,
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Deserialize, PartialEq)]
 pub struct CyclesConfig {
-    /// Minimum SCC size to report. Defaults to `2`.
     #[serde(rename = "min-scc-size", default = "default_min_scc_size")]
     pub min_scc_size: usize,
 
-    /// Optional maximum SCC size to report.
     #[serde(rename = "max-scc-size", default)]
     pub max_scc_size: Option<usize>,
+
+    #[serde(default)]
+    pub ignore: Vec<IgnoredCycle>,
 }
 
 fn default_min_scc_size() -> usize {
@@ -83,6 +89,7 @@ impl Default for CyclesConfig {
         CyclesConfig {
             min_scc_size: default_min_scc_size(),
             max_scc_size: None,
+            ignore: Vec::new(),
         }
     }
 }
@@ -120,6 +127,14 @@ impl Config {
             if max < self.cycles.min_scc_size {
                 return Err(ConfigError::Validation(
                     "max-scc-size must be greater than or equal to min-scc-size".to_string(),
+                ));
+            }
+        }
+
+        for entry in &self.cycles.ignore {
+            if entry.files.is_empty() {
+                return Err(ConfigError::Validation(
+                    "[[cycles.ignore]] entry must have at least one file".to_string(),
                 ));
             }
         }
@@ -258,7 +273,6 @@ max-scc-size = 2
 
     #[test]
     fn cycles_defaults_when_section_empty() {
-        // An empty [cycles] section should use defaults.
         let toml_str = r#"
 source-roots = ["."]
 
@@ -267,5 +281,66 @@ source-roots = ["."]
         let config = Config::from_toml(toml_str).unwrap();
         assert_eq!(config.cycles.min_scc_size, 2);
         assert_eq!(config.cycles.max_scc_size, None);
+    }
+
+    #[test]
+    fn parse_cycles_ignore_single() {
+        let toml_str = r#"
+source-roots = ["."]
+
+[[cycles.ignore]]
+files = ["pkg/a.py", "pkg/b.py"]
+"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert_eq!(config.cycles.ignore.len(), 1);
+        assert_eq!(config.cycles.ignore[0].files, vec!["pkg/a.py", "pkg/b.py"]);
+        assert_eq!(config.cycles.ignore[0].reason, None);
+    }
+
+    #[test]
+    fn parse_cycles_ignore_with_reason() {
+        let toml_str = r#"
+source-roots = ["."]
+
+[[cycles.ignore]]
+files = ["a.py", "b.py"]
+reason = "legacy"
+"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert_eq!(config.cycles.ignore[0].reason.as_deref(), Some("legacy"));
+    }
+
+    #[test]
+    fn parse_cycles_ignore_multiple() {
+        let toml_str = r#"
+source-roots = ["."]
+
+[[cycles.ignore]]
+files = ["a.py", "b.py"]
+
+[[cycles.ignore]]
+files = ["x.py", "y.py"]
+"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert_eq!(config.cycles.ignore.len(), 2);
+    }
+
+    #[test]
+    fn no_ignore_section_defaults_to_empty() {
+        let toml_str = r#"source-roots = ["."]"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert!(config.cycles.ignore.is_empty());
+    }
+
+    #[test]
+    fn parse_cycles_ignore_empty_files_is_error() {
+        let toml_str = r#"
+source-roots = ["."]
+
+[[cycles.ignore]]
+files = []
+"#;
+        let result = Config::from_toml(toml_str);
+        assert!(result.is_err());
     }
 }

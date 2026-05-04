@@ -52,6 +52,7 @@ fn resolve_import_stmt(
             deps.push(ResolvedDep {
                 source: source_module.to_string(),
                 target: name.name.clone(),
+                line: imp.line,
             });
         } else {
             unresolved.push(UnresolvedImport {
@@ -123,6 +124,7 @@ fn resolve_import_from_stmt(
             deps.push(ResolvedDep {
                 source: source_module.to_string(),
                 target: qualified,
+                line: imp.line,
             });
             any_resolved = true;
         }
@@ -134,6 +136,7 @@ fn resolve_import_from_stmt(
         deps.push(ResolvedDep {
             source: source_module.to_string(),
             target: base_module.clone(),
+            line: imp.line,
         });
         any_resolved = true;
     }
@@ -188,6 +191,7 @@ mod tests {
             module: None,
             names: vec![name("core.engine")],
             level: 0,
+            line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -205,6 +209,7 @@ mod tests {
             module: None,
             names: vec![name("os")],
             level: 0,
+            line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -221,6 +226,7 @@ mod tests {
             module: Some("core.engine".to_string()),
             names: vec![name("Engine")],
             level: 0,
+            line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -238,11 +244,10 @@ mod tests {
             module: Some("models".to_string()),
             names: vec![name("user")],
             level: 0,
+            line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
-        // `user` resolves as the submodule `models.user`, so only that should
-        // appear — the base module `models` is NOT added as a dependency.
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "models.user");
         assert!(result.unresolved.is_empty());
@@ -256,6 +261,7 @@ mod tests {
             module: Some("os".to_string()),
             names: vec![name("path")],
             level: 0,
+            line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -266,13 +272,13 @@ mod tests {
 
     #[test]
     fn relative_import_single_dot() {
-        // from .session import create_session  (in services.auth.login)
         let index = make_index(&["services.auth.login", "services.auth.session"]);
         let imports = vec![RawImport {
             kind: ImportKind::ImportFrom,
             module: Some("session".to_string()),
             names: vec![name("create_session")],
             level: 1,
+            line: 0,
         }];
 
         let result = resolve_file_imports("services.auth.login", &imports, &index);
@@ -282,16 +288,13 @@ mod tests {
 
     #[test]
     fn relative_import_double_dot() {
-        // from ..notifications.email import send_email  (in services.auth.tokens)
-        let index = make_index(&[
-            "services.auth.tokens",
-            "services.notifications.email",
-        ]);
+        let index = make_index(&["services.auth.tokens", "services.notifications.email"]);
         let imports = vec![RawImport {
             kind: ImportKind::ImportFrom,
             module: Some("notifications.email".to_string()),
             names: vec![name("send_email")],
             level: 2,
+            line: 0,
         }];
 
         let result = resolve_file_imports("services.auth.tokens", &imports, &index);
@@ -301,33 +304,29 @@ mod tests {
 
     #[test]
     fn relative_import_dot_import_sibling_module() {
-        // from . import engine  (in core.runner)
         let index = make_index(&["core", "core.runner", "core.engine"]);
         let imports = vec![RawImport {
             kind: ImportKind::ImportFrom,
             module: None,
             names: vec![name("engine")],
             level: 1,
+            line: 0,
         }];
 
         let result = resolve_file_imports("core.runner", &imports, &index);
-        // `engine` resolves as the submodule `core.engine`, so only that
-        // should appear — the base module `core` is NOT a dependency.
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
     }
 
     #[test]
     fn submodule_resolution_excludes_base_package() {
-        // `from models import user` where `models.user` is a known submodule.
-        // The base package `models` (__init__.py) should NOT appear as a
-        // dependency — only the submodule `models.user` matters.
         let index = make_index(&["models", "models.user", "models.base"]);
         let imports = vec![RawImport {
             kind: ImportKind::ImportFrom,
             module: Some("models".to_string()),
             names: vec![name("user"), name("base")],
             level: 0,
+            line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -335,22 +334,19 @@ mod tests {
         assert_eq!(targets.len(), 2);
         assert!(targets.contains(&"models.user"));
         assert!(targets.contains(&"models.base"));
-        // `models` itself must NOT be present.
         assert!(!targets.contains(&"models"));
         assert!(result.unresolved.is_empty());
     }
 
     #[test]
     fn base_package_added_when_names_are_symbols() {
-        // `from core.engine import Engine` where `Engine` is a class, not a
-        // submodule. No `core.engine.Engine` module exists, so the base module
-        // `core.engine` should be the dependency.
         let index = make_index(&["core.engine"]);
         let imports = vec![RawImport {
             kind: ImportKind::ImportFrom,
             module: Some("core.engine".to_string()),
             names: vec![name("Engine")],
             level: 0,
+            line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -361,19 +357,16 @@ mod tests {
 
     #[test]
     fn from_import_symbol_from_init_py() {
-        // `from models import Base` where `Base` is a class defined in
-        // `models/__init__.py`. There is no `models.Base` submodule, so the
-        // base package `models` (i.e. __init__.py) should be the dependency.
         let index = make_index(&["models", "models.user"]);
         let imports = vec![RawImport {
             kind: ImportKind::ImportFrom,
             module: Some("models".to_string()),
             names: vec![name("Base")],
             level: 0,
+            line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
-        // `models.Base` is not a module, so we fall back to the base package.
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "models");
         assert!(result.unresolved.is_empty());
@@ -381,13 +374,13 @@ mod tests {
 
     #[test]
     fn relative_import_escapes_root() {
-        // from ...x import y  (in pkg.mod — only 2 components, level 3)
         let index = make_index(&["pkg.mod"]);
         let imports = vec![RawImport {
             kind: ImportKind::ImportFrom,
             module: Some("x".to_string()),
             names: vec![name("y")],
             level: 3,
+            line: 0,
         }];
 
         let result = resolve_file_imports("pkg.mod", &imports, &index);
@@ -405,18 +398,21 @@ mod tests {
                 module: Some("core.engine".to_string()),
                 names: vec![name("Engine")],
                 level: 0,
+                line: 0,
             },
             RawImport {
                 kind: ImportKind::Import,
                 module: None,
                 names: vec![name("os")],
                 level: 0,
+                line: 0,
             },
             RawImport {
                 kind: ImportKind::ImportFrom,
                 module: Some("pathlib".to_string()),
                 names: vec![name("Path")],
                 level: 0,
+                line: 0,
             },
         ];
 
@@ -434,6 +430,7 @@ mod tests {
             module: Some("core.engine".to_string()),
             names: vec![name("*")],
             level: 0,
+            line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
