@@ -124,7 +124,7 @@ fn nested_bodies(stmt: &Stmt) -> Vec<&[Stmt]> {
 
 #[cfg(test)]
 mod tests {
-    use rustpython_parser::{ast, Parse};
+    use rustpython_parser::{Parse, ast};
 
     use super::*;
 

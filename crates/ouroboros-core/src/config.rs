@@ -51,7 +51,7 @@ pub struct Config {
 }
 
 /// Configuration for the parser subsystem.
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Default, Deserialize, PartialEq)]
 pub struct ParseConfig {
     /// Whether to include imports nested inside functions, methods, and
     /// control-flow blocks (i.e. "local" imports).
@@ -90,14 +90,6 @@ impl Default for CyclesConfig {
             min_scc_size: default_min_scc_size(),
             max_scc_size: None,
             ignore: Vec::new(),
-        }
-    }
-}
-
-impl Default for ParseConfig {
-    fn default() -> Self {
-        ParseConfig {
-            local_imports: false,
         }
     }
 }
@@ -165,7 +157,7 @@ mod tests {
             config.source_roots,
             vec!["src".to_string(), "lib".to_string()]
         );
-        assert_eq!(config.parse.local_imports, false);
+        assert!(!config.parse.local_imports);
     }
 
     #[test]
@@ -178,14 +170,14 @@ local-imports = true
 "#;
         let config = Config::from_toml(toml_str).unwrap();
         assert_eq!(config.source_roots, vec!["src".to_string()]);
-        assert_eq!(config.parse.local_imports, true);
+        assert!(config.parse.local_imports);
     }
 
     #[test]
     fn parse_toml_without_parse_section_defaults_to_false() {
         let toml_str = r#"source-roots = ["src"]"#;
         let config = Config::from_toml(toml_str).unwrap();
-        assert_eq!(config.parse.local_imports, false);
+        assert!(!config.parse.local_imports);
     }
 
     #[test]
@@ -199,7 +191,7 @@ local-imports = true
     fn default_config() {
         let config = Config::default();
         assert_eq!(config.source_roots, vec!["src".to_string()]);
-        assert_eq!(config.parse.local_imports, false);
+        assert!(!config.parse.local_imports);
         assert_eq!(config.cycles.min_scc_size, 2);
         assert_eq!(config.cycles.max_scc_size, None);
     }

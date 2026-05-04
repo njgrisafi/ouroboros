@@ -49,10 +49,7 @@ impl DiscoveryResult {
 /// each `source_roots` entry in `config` is resolved relative to it.
 ///
 /// Returns a [`DiscoveryResult`] with deterministically sorted file lists.
-pub fn discover(
-    config: &Config,
-    project_root: &Path,
-) -> Result<DiscoveryResult, DiscoveryError> {
+pub fn discover(config: &Config, project_root: &Path) -> Result<DiscoveryResult, DiscoveryError> {
     let mut roots = Vec::with_capacity(config.source_roots.len());
 
     for src_root in &config.source_roots {
@@ -63,7 +60,10 @@ pub fn discover(
             .into_iter()
             .map(|rel_path| {
                 let module_name = module_name::module_name_for_path(&rel_path);
-                PythonFile { rel_path, module_name }
+                PythonFile {
+                    rel_path,
+                    module_name,
+                }
             })
             .collect();
 
@@ -122,20 +122,14 @@ mod tests {
 
     #[test]
     fn discover_dot_root() {
-        let (tmp, config) = make_project(
-            &["app.py", "models/user.py"],
-            &["."],
-        );
+        let (tmp, config) = make_project(&["app.py", "models/user.py"], &["."]);
         let result = discover(&config, tmp.path()).unwrap();
         assert_eq!(result.total_files(), 2);
     }
 
     #[test]
     fn discover_multiple_roots() {
-        let (tmp, config) = make_project(
-            &["src/a.py", "lib/b.py"],
-            &["src", "lib"],
-        );
+        let (tmp, config) = make_project(&["src/a.py", "lib/b.py"], &["src", "lib"]);
         let result = discover(&config, tmp.path()).unwrap();
         assert_eq!(result.roots.len(), 2);
         assert_eq!(result.total_files(), 2);

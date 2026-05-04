@@ -206,7 +206,7 @@ fn main() {
             .map(std::path::PathBuf::from)
             .collect();
         ignore_paths.sort();
-        let matched = filter_result.suppressed.iter().any(|c| *c == ignore_paths);
+        let matched = filter_result.suppressed.contains(&ignore_paths);
         if !matched {
             let files_str = ignore_paths
                 .iter()

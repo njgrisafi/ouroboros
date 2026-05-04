@@ -3,7 +3,7 @@
 pub mod error;
 mod imports;
 
-use rustpython_parser::{ast, Parse};
+use rustpython_parser::{Parse, ast};
 
 pub use error::ParseError;
 

@@ -17,10 +17,10 @@ pub fn filter_cycles_by_size(cycles: Vec<FileCycle>, config: &CyclesConfig) -> V
             if size < config.min_scc_size {
                 return false;
             }
-            if let Some(max) = config.max_scc_size {
-                if size > max {
-                    return false;
-                }
+            if let Some(max) = config.max_scc_size
+                && size > max
+            {
+                return false;
             }
             true
         })
