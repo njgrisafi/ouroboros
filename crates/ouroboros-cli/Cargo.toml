@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 ouroboros-core = { path = "../ouroboros-core" }
+indicatif = "0.17"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
