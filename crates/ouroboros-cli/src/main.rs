@@ -37,6 +37,10 @@ struct Cli {
     /// Only report cycles where all files belong to the same top-level package.
     #[arg(long)]
     package: bool,
+
+    /// Show detailed intermediate output (discovery, imports, graph).
+    #[arg(long, short)]
+    verbose: bool,
 }
 
 /// Walk upward from `start` looking for `oboros.toml`.
@@ -79,8 +83,9 @@ fn main() {
         None => find_config(&cwd),
     };
 
-    let verbose = matches!(cli.format, OutputFormat::Human);
-    let spinner = make_spinner(verbose);
+    let is_human = matches!(cli.format, OutputFormat::Human);
+    let verbose = is_human && cli.verbose;
+    let spinner = make_spinner(is_human && !cli.verbose);
 
     let (config, project_root) = match config_path {
         Some(path) => {
