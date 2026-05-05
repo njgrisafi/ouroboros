@@ -2,6 +2,7 @@ mod output;
 
 use clap::Parser;
 use clap::ValueEnum;
+use indicatif::{ProgressBar, ProgressStyle};
 use ouroboros_core::config::Config;
 use ouroboros_core::cycles;
 use ouroboros_core::discovery;
@@ -36,6 +37,10 @@ struct Cli {
     /// Only report cycles where all files belong to the same top-level package.
     #[arg(long)]
     package: bool,
+
+    /// Show detailed intermediate output (discovery, imports, graph).
+    #[arg(long, short)]
+    verbose: bool,
 }
 
 /// Walk upward from `start` looking for `oboros.toml`.
@@ -53,6 +58,20 @@ fn find_config(start: &Path) -> Option<PathBuf> {
     }
 }
 
+fn make_spinner(verbose: bool) -> ProgressBar {
+    if !verbose {
+        return ProgressBar::hidden();
+    }
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(
+        ProgressStyle::default_spinner()
+            .template("{spinner:.cyan} {msg}")
+            .expect("invalid spinner template"),
+    );
+    pb.enable_steady_tick(std::time::Duration::from_millis(80));
+    pb
+}
+
 fn main() {
     let cli = Cli::parse();
 
@@ -64,7 +83,9 @@ fn main() {
         None => find_config(&cwd),
     };
 
-    let verbose = matches!(cli.format, OutputFormat::Human);
+    let is_human = matches!(cli.format, OutputFormat::Human);
+    let verbose = is_human && cli.verbose;
+    let spinner = make_spinner(is_human && !cli.verbose);
 
     let (config, project_root) = match config_path {
         Some(path) => {
@@ -92,6 +113,7 @@ fn main() {
     }
 
     // Discover Python files in the configured source roots.
+    spinner.set_message("Discovering Python files...");
     let discovery_result = match discovery::discover(&config, &project_root) {
         Ok(result) => {
             if verbose {
@@ -116,6 +138,10 @@ fn main() {
     };
 
     // Extract imports from each discovered file.
+    spinner.set_message(format!(
+        "Extracting imports from {} files...",
+        discovery_result.total_files()
+    ));
     if verbose {
         println!("\n--- imports ---");
     }
@@ -160,6 +186,7 @@ fn main() {
     }
 
     // Build first-party module index and resolve imports.
+    spinner.set_message("Resolving imports...");
     let index = resolver::ModuleIndex::from_discovery(&discovery_result);
     let resolve_result = resolver::resolve_all(&discovery_result, &index, &config);
 
@@ -181,6 +208,7 @@ fn main() {
         }
     }
 
+    spinner.set_message("Building dependency graph...");
     let graph_result = graph::build_file_dependency_graph(&discovery_result, &resolve_result);
 
     if verbose {
@@ -195,6 +223,7 @@ fn main() {
         }
     }
 
+    spinner.set_message("Detecting cycles...");
     let all_cycles = graph::dependency_cycles(&graph_result.graph);
     let size_filtered = cycles::filter_cycles_by_size(all_cycles, &config.cycles);
     let filter_result = cycles::filter_ignored_cycles(size_filtered, &config.cycles.ignore);
@@ -223,6 +252,8 @@ fn main() {
         filter_result.kept
     };
     let suppressed_count = filter_result.suppressed.len();
+
+    spinner.finish_and_clear();
 
     if cli.dump_ignores {
         match cli.format {
