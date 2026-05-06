@@ -1,6 +1,8 @@
 mod output;
+mod report;
 
 use clap::Parser;
+use clap::Subcommand;
 use clap::ValueEnum;
 use indicatif::{ProgressBar, ProgressStyle};
 use ouroboros_core::config::Config;
@@ -18,10 +20,31 @@ enum OutputFormat {
     Json,
 }
 
+#[derive(Subcommand)]
+enum Commands {
+    /// Generate an HTML report from a JSON cycle report.
+    Report {
+        /// Path to the JSON report file (produced by --format json).
+        input: PathBuf,
+
+        /// Output HTML file path.
+        #[arg(long, short, default_value = "report.html")]
+        output: PathBuf,
+
+        /// Project source root for reading import lines. If provided, the report
+        /// shows actual import statements in the diff view.
+        #[arg(long)]
+        source_root: Option<PathBuf>,
+    },
+}
+
 /// Ouroboros — detect circular imports in Python projects.
 #[derive(Parser)]
 #[command(name = "oboros", version)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
 
@@ -45,7 +68,7 @@ struct Cli {
 
 /// Walk upward from `start` looking for `oboros.toml`.
 /// Returns the path to the file if found, or `None`.
-fn find_config(start: &Path) -> Option<PathBuf> {
+pub(crate) fn find_config(start: &Path) -> Option<PathBuf> {
     let mut dir = start.to_path_buf();
     loop {
         let candidate = dir.join("oboros.toml");
@@ -74,6 +97,16 @@ fn make_spinner(verbose: bool) -> ProgressBar {
 
 fn main() {
     let cli = Cli::parse();
+
+    if let Some(Commands::Report {
+        input,
+        output,
+        source_root,
+    }) = cli.command.as_ref()
+    {
+        report::run(input, output, source_root.as_deref());
+        return;
+    }
 
     let cwd = std::env::current_dir().expect("failed to determine current directory");
 
