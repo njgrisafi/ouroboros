@@ -942,7 +942,7 @@ mod tests {
             cycles: vec![cycle],
         };
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[dir.clone()]);
+        let html = generate_html(&report, &stats, std::slice::from_ref(&dir));
         assert!(html.contains("from auth.b import handler"));
         assert!(html.contains("diff-code"));
     }
@@ -1000,7 +1000,7 @@ mod tests {
             cycles: vec![cycle],
         };
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[dir.clone()]);
+        let html = generate_html(&report, &stats, std::slice::from_ref(&dir));
         assert!(html.contains("InvoiceManager"));
         assert!(html.contains("LineManager"));
         assert!(html.contains("from billing.managers import"));
