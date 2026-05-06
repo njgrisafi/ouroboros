@@ -418,26 +418,33 @@ document.addEventListener('DOMContentLoaded', function() {
         th.addEventListener('click', function() {
             var table = th.closest('table');
             var idx = Array.from(th.parentNode.children).indexOf(th);
-            var cycleRows = Array.from(table.querySelectorAll('tr.cycle-row'));
-            var pairs = cycleRows.map(function(r) {
-                var detail = r.nextElementSibling;
-                var hasDetail = detail && detail.classList.contains('cycle-detail');
-                return { row: r, detail: hasDetail ? detail : null };
-            });
             var isNum = th.dataset.sortType === 'number';
             var asc = !th.classList.contains('asc');
             th.parentNode.querySelectorAll('th').forEach(function(h) { h.classList.remove('asc','desc'); });
             th.classList.add(asc ? 'asc' : 'desc');
-            pairs.sort(function(a, b) {
-                var av = a.row.children[idx].textContent.trim();
-                var bv = b.row.children[idx].textContent.trim();
-                if (isNum) return asc ? parseFloat(av) - parseFloat(bv) : parseFloat(bv) - parseFloat(av);
-                return asc ? av.localeCompare(bv) : bv.localeCompare(av);
-            });
-            pairs.forEach(function(p) {
-                table.appendChild(p.row);
-                if (p.detail) table.appendChild(p.detail);
-            });
+            var cycleRows = Array.from(table.querySelectorAll('tr.cycle-row'));
+            if (cycleRows.length > 0) {
+                var pairs = cycleRows.map(function(r) {
+                    var detail = r.nextElementSibling;
+                    return { row: r, detail: detail && detail.classList.contains('cycle-detail') ? detail : null };
+                });
+                pairs.sort(function(a, b) {
+                    var av = a.row.children[idx].textContent.trim();
+                    var bv = b.row.children[idx].textContent.trim();
+                    if (isNum) return asc ? parseFloat(av) - parseFloat(bv) : parseFloat(bv) - parseFloat(av);
+                    return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+                });
+                pairs.forEach(function(p) { table.appendChild(p.row); if (p.detail) table.appendChild(p.detail); });
+            } else {
+                var rows = Array.from(table.querySelectorAll('tr')).slice(1);
+                rows.sort(function(a, b) {
+                    var av = a.children[idx].textContent.trim();
+                    var bv = b.children[idx].textContent.trim();
+                    if (isNum) return asc ? parseFloat(av) - parseFloat(bv) : parseFloat(bv) - parseFloat(av);
+                    return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+                });
+                rows.forEach(function(r) { table.appendChild(r); });
+            }
         });
     });
     document.querySelectorAll('.cycle-row').forEach(function(row) {
