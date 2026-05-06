@@ -8,9 +8,10 @@ name = "oboros"
 path = "src/main.rs"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
-ouroboros-core = { path = "../ouroboros-core" }
 indicatif = "0.17"
+ouroboros-core = { path = "../ouroboros-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

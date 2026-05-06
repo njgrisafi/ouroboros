@@ -1,22 +1,22 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use ouroboros_core::graph::EdgeMetadata;
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct JsonReport {
     pub version: u32,
     pub summary: JsonSummary,
     pub cycles: Vec<JsonCycle>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct JsonSummary {
     pub cycles_reported: usize,
     pub cycles_suppressed: usize,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct JsonCycle {
     pub index: usize,
     pub packages: Vec<String>,
@@ -24,14 +24,14 @@ pub struct JsonCycle {
     pub files: Vec<JsonCycleFile>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct JsonCycleFile {
     pub path: String,
     pub import_lines: Vec<u32>,
     pub edges: Vec<JsonEdge>,
 }
 
-#[derive(Debug, Serialize, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct JsonEdge {
     pub to: String,
     pub lines: Vec<u32>,
