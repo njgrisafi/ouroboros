@@ -47,6 +47,8 @@ pub struct RawImport {
     pub level: u32,
     /// The 1-indexed line number of this import statement in the source file.
     pub line: u32,
+    /// The 1-indexed final line number of this import statement in the source file.
+    pub end_line: u32,
 }
 
 /// Parse Python source code and extract import statements.

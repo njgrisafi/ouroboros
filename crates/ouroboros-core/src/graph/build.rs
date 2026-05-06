@@ -11,7 +11,7 @@ use crate::resolver::ResolveResult;
 pub type FileDependencyGraph = HashMap<PathBuf, BTreeSet<PathBuf>>;
 
 pub struct EdgeMetadata {
-    pub lines: HashMap<(PathBuf, PathBuf), Vec<u32>>,
+    pub lines: HashMap<(PathBuf, PathBuf), Vec<(u32, u32)>>,
 }
 
 pub struct FileGraphResult {
@@ -39,7 +39,7 @@ pub fn build_file_dependency_graph(
         }
     }
 
-    let mut edge_lines: HashMap<(PathBuf, PathBuf), Vec<u32>> = HashMap::new();
+    let mut edge_lines: HashMap<(PathBuf, PathBuf), Vec<(u32, u32)>> = HashMap::new();
 
     for dep in &resolve_result.deps {
         let from_path = module_to_path.get(dep.source.as_str()).cloned();
@@ -50,7 +50,7 @@ pub fn build_file_dependency_graph(
             edge_lines
                 .entry((from.clone(), to.clone()))
                 .or_default()
-                .push(dep.line);
+                .push((dep.line, dep.end_line));
         }
     }
 
@@ -91,6 +91,7 @@ mod tests {
                 source: src.to_string(),
                 target: tgt.to_string(),
                 line: 0,
+                end_line: 0,
             })
             .collect();
 

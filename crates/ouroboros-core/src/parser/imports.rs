@@ -33,6 +33,8 @@ fn collect_imports_recursive(
             Stmt::Import(import_stmt) => {
                 let offset = u32::from(import_stmt.range.start()) as usize;
                 let line = byte_offset_to_line(source.as_bytes(), offset);
+                let end_offset = u32::from(import_stmt.range.end()) as usize;
+                let end_line = byte_offset_to_line(source.as_bytes(), end_offset.saturating_sub(1));
 
                 let names = import_stmt
                     .names
@@ -49,11 +51,14 @@ fn collect_imports_recursive(
                     names,
                     level: 0,
                     line,
+                    end_line,
                 });
             }
             Stmt::ImportFrom(import_from) => {
                 let offset = u32::from(import_from.range.start()) as usize;
                 let line = byte_offset_to_line(source.as_bytes(), offset);
+                let end_offset = u32::from(import_from.range.end()) as usize;
+                let end_line = byte_offset_to_line(source.as_bytes(), end_offset.saturating_sub(1));
 
                 let module = import_from.module.as_ref().map(|id| id.to_string());
 
@@ -74,6 +79,7 @@ fn collect_imports_recursive(
                     names,
                     level,
                     line,
+                    end_line,
                 });
             }
             _ if include_local => {
@@ -147,6 +153,8 @@ mod tests {
         assert!(matches!(imp.kind, ImportKind::Import));
         assert_eq!(imp.module, None);
         assert_eq!(imp.level, 0);
+        assert_eq!(imp.line, 1);
+        assert_eq!(imp.end_line, 1);
         assert_eq!(imp.names.len(), 1);
         assert_eq!(imp.names[0].name, "os");
         assert_eq!(imp.names[0].asname, None);
@@ -398,8 +406,11 @@ except ImportError:
         let source = "import os\nfrom sys import argv\nimport json\n";
         let imports = parse_and_collect(source);
         assert_eq!(imports[0].line, 1);
+        assert_eq!(imports[0].end_line, 1);
         assert_eq!(imports[1].line, 2);
+        assert_eq!(imports[1].end_line, 2);
         assert_eq!(imports[2].line, 3);
+        assert_eq!(imports[2].end_line, 3);
     }
 
     #[test]
@@ -407,6 +418,26 @@ except ImportError:
         let source = "import os\n\nfrom sys import argv\n";
         let imports = parse_and_collect(source);
         assert_eq!(imports[0].line, 1);
+        assert_eq!(imports[0].end_line, 1);
         assert_eq!(imports[1].line, 3);
+        assert_eq!(imports[1].end_line, 3);
+    }
+
+    #[test]
+    fn multiline_import_line_range() {
+        let source = "from billing.managers import (\n    InvoiceManager,\n    LineManager,\n)\n";
+        let imports = parse_and_collect(source);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].line, 1);
+        assert_eq!(imports[0].end_line, 4);
+    }
+
+    #[test]
+    fn single_line_import_same_start_end() {
+        let source = "from os import path\n";
+        let imports = parse_and_collect(source);
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].line, 1);
+        assert_eq!(imports[0].end_line, 1);
     }
 }

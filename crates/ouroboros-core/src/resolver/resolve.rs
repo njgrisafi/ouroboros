@@ -53,6 +53,7 @@ fn resolve_import_stmt(
                 source: source_module.to_string(),
                 target: name.name.clone(),
                 line: imp.line,
+                end_line: imp.end_line,
             });
         } else {
             unresolved.push(UnresolvedImport {
@@ -125,6 +126,7 @@ fn resolve_import_from_stmt(
                 source: source_module.to_string(),
                 target: qualified,
                 line: imp.line,
+                end_line: imp.end_line,
             });
             any_resolved = true;
         }
@@ -137,6 +139,7 @@ fn resolve_import_from_stmt(
             source: source_module.to_string(),
             target: base_module.clone(),
             line: imp.line,
+            end_line: imp.end_line,
         });
         any_resolved = true;
     }
@@ -192,6 +195,7 @@ mod tests {
             names: vec![name("core.engine")],
             level: 0,
             line: 0,
+            end_line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -210,6 +214,7 @@ mod tests {
             names: vec![name("os")],
             level: 0,
             line: 0,
+            end_line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -227,6 +232,7 @@ mod tests {
             names: vec![name("Engine")],
             level: 0,
             line: 0,
+            end_line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -245,6 +251,7 @@ mod tests {
             names: vec![name("user")],
             level: 0,
             line: 0,
+            end_line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -262,6 +269,7 @@ mod tests {
             names: vec![name("path")],
             level: 0,
             line: 0,
+            end_line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -279,6 +287,7 @@ mod tests {
             names: vec![name("create_session")],
             level: 1,
             line: 0,
+            end_line: 0,
         }];
 
         let result = resolve_file_imports("services.auth.login", &imports, &index);
@@ -295,6 +304,7 @@ mod tests {
             names: vec![name("send_email")],
             level: 2,
             line: 0,
+            end_line: 0,
         }];
 
         let result = resolve_file_imports("services.auth.tokens", &imports, &index);
@@ -311,6 +321,7 @@ mod tests {
             names: vec![name("engine")],
             level: 1,
             line: 0,
+            end_line: 0,
         }];
 
         let result = resolve_file_imports("core.runner", &imports, &index);
@@ -327,6 +338,7 @@ mod tests {
             names: vec![name("user"), name("base")],
             level: 0,
             line: 0,
+            end_line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -347,6 +359,7 @@ mod tests {
             names: vec![name("Engine")],
             level: 0,
             line: 0,
+            end_line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -364,6 +377,7 @@ mod tests {
             names: vec![name("Base")],
             level: 0,
             line: 0,
+            end_line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);
@@ -381,6 +395,7 @@ mod tests {
             names: vec![name("y")],
             level: 3,
             line: 0,
+            end_line: 0,
         }];
 
         let result = resolve_file_imports("pkg.mod", &imports, &index);
@@ -399,6 +414,7 @@ mod tests {
                 names: vec![name("Engine")],
                 level: 0,
                 line: 0,
+                end_line: 0,
             },
             RawImport {
                 kind: ImportKind::Import,
@@ -406,6 +422,7 @@ mod tests {
                 names: vec![name("os")],
                 level: 0,
                 line: 0,
+                end_line: 0,
             },
             RawImport {
                 kind: ImportKind::ImportFrom,
@@ -413,6 +430,7 @@ mod tests {
                 names: vec![name("Path")],
                 level: 0,
                 line: 0,
+                end_line: 0,
             },
         ];
 
@@ -431,6 +449,7 @@ mod tests {
             names: vec![name("*")],
             level: 0,
             line: 0,
+            end_line: 0,
         }];
 
         let result = resolve_file_imports("app", &imports, &index);

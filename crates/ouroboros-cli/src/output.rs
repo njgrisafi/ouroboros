@@ -66,7 +66,7 @@ pub fn collect_import_lines(
                 .map(|v| v.as_slice())
                 .unwrap_or(&[])
                 .iter()
-                .copied()
+                .flat_map(|&(start, end)| start..=end)
         })
         .collect();
     import_lines.sort();
@@ -129,7 +129,10 @@ pub fn build_json_report(
                                 .lines
                                 .get(&(path.to_path_buf(), other.clone()))
                                 .map(|lines| {
-                                    let mut sorted = lines.clone();
+                                    let mut sorted: Vec<u32> = lines
+                                        .iter()
+                                        .flat_map(|&(start, end)| start..=end)
+                                        .collect();
                                     sorted.sort();
                                     sorted.dedup();
                                     JsonEdge {
@@ -188,7 +191,7 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    fn make_edge_metadata(edges: &[(&str, &str, Vec<u32>)]) -> EdgeMetadata {
+    fn make_edge_metadata(edges: &[(&str, &str, Vec<(u32, u32)>)]) -> EdgeMetadata {
         let mut lines = HashMap::new();
         for (from, to, line_nums) in edges {
             lines.insert((PathBuf::from(from), PathBuf::from(to)), line_nums.clone());
@@ -214,8 +217,10 @@ mod tests {
     #[test]
     fn single_cycle_with_import_lines() {
         let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
-        let edge_metadata =
-            make_edge_metadata(&[("a.py", "b.py", vec![10]), ("b.py", "a.py", vec![5])]);
+        let edge_metadata = make_edge_metadata(&[
+            ("a.py", "b.py", vec![(10, 10)]),
+            ("b.py", "a.py", vec![(5, 5)]),
+        ]);
         let report = build_json_report(&kept, 0, &edge_metadata);
 
         assert_eq!(report.cycles.len(), 1);
@@ -247,7 +252,8 @@ mod tests {
     #[test]
     fn import_lines_sorted_and_deduped() {
         let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
-        let edge_metadata = make_edge_metadata(&[("a.py", "b.py", vec![30, 10, 10, 20])]);
+        let edge_metadata =
+            make_edge_metadata(&[("a.py", "b.py", vec![(30, 30), (10, 10), (10, 10), (20, 20)])]);
         let report = build_json_report(&kept, 0, &edge_metadata);
 
         assert_eq!(report.cycles[0].files[0].import_lines, vec![10, 20, 30]);
@@ -260,8 +266,10 @@ mod tests {
             PathBuf::from("b.py"),
             PathBuf::from("c.py"),
         ]];
-        let edge_metadata =
-            make_edge_metadata(&[("a.py", "b.py", vec![1]), ("b.py", "c.py", vec![2])]);
+        let edge_metadata = make_edge_metadata(&[
+            ("a.py", "b.py", vec![(1, 1)]),
+            ("b.py", "c.py", vec![(2, 2)]),
+        ]);
         let report = build_json_report(&kept, 0, &edge_metadata);
 
         assert_eq!(report.cycles[0].files[2].path, "c.py");
@@ -271,7 +279,7 @@ mod tests {
     #[test]
     fn json_round_trip_is_valid() {
         let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
-        let edge_metadata = make_edge_metadata(&[("a.py", "b.py", vec![7])]);
+        let edge_metadata = make_edge_metadata(&[("a.py", "b.py", vec![(7, 7)])]);
         let report = build_json_report(&kept, 0, &edge_metadata);
 
         let json = serde_json::to_string_pretty(&report).unwrap();
@@ -303,10 +311,22 @@ mod tests {
             PathBuf::from("b.py"),
             PathBuf::from("c.py"),
         ];
-        let edge_metadata =
-            make_edge_metadata(&[("a.py", "b.py", vec![5]), ("a.py", "c.py", vec![10])]);
+        let edge_metadata = make_edge_metadata(&[
+            ("a.py", "b.py", vec![(5, 5)]),
+            ("a.py", "c.py", vec![(10, 10)]),
+        ]);
         let lines = collect_import_lines(Path::new("a.py"), &cycle, &edge_metadata);
         assert_eq!(lines, vec![5, 10]);
+    }
+
+    #[test]
+    fn import_line_ranges_expand_in_json_output() {
+        let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
+        let edge_metadata = make_edge_metadata(&[("a.py", "b.py", vec![(5, 8)])]);
+        let report = build_json_report(&kept, 0, &edge_metadata);
+
+        assert_eq!(report.cycles[0].files[0].import_lines, vec![5, 6, 7, 8]);
+        assert_eq!(report.cycles[0].files[0].edges[0].lines, vec![5, 6, 7, 8]);
     }
 
     #[test]

@@ -27,6 +27,8 @@ pub struct ResolvedDep {
     pub target: String,
     /// The 1-indexed line number of the import statement.
     pub line: u32,
+    /// The 1-indexed final line number of the import statement.
+    pub end_line: u32,
 }
 
 /// An import that could not be resolved to a first-party module.
@@ -115,6 +117,7 @@ pub fn resolve_all(
             .cmp(&b.source)
             .then(a.target.cmp(&b.target))
             .then(a.line.cmp(&b.line))
+            .then(a.end_line.cmp(&b.end_line))
     });
     all_deps.dedup();
 
