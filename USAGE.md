@@ -354,6 +354,13 @@ Looks up the exact module `a.b.c` in the first-party index. If it exists, an edg
 
 Relative imports (`from . import x`, `from ..foo import bar`) are converted to absolute module paths based on the importing file's own module name, then resolved using the rules above.
 
+The leading dot is interpreted with Python's package semantics: inside a package's `__init__.py`, a single dot refers to the package **itself**, whereas inside a regular module it refers to the module's **parent** package. For example, `from .staff import x`:
+
+- in `pkg/services/__init__.py` (package `pkg.services`) resolves to `pkg.services.staff`
+- in `pkg/services/api.py` (module `pkg.services.api`) also resolves to `pkg.services.staff`
+
+Handling `__init__.py` correctly is required to detect cycles that close through an eager `__init__.py` re-export (a package `__init__` that imports its own submodules).
+
 ### `__init__.py` ownership
 
 - `pkg/__init__.py` owns the module `pkg`
