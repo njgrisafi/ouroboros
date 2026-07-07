@@ -18,6 +18,7 @@ pub(crate) fn resolve_file_imports(
     source_module: &str,
     imports: &[RawImport],
     index: &ModuleIndex,
+    include_ancestor_init: bool,
     source_is_package: bool,
 ) -> FileResolution {
     let mut deps = Vec::new();
@@ -26,7 +27,14 @@ pub(crate) fn resolve_file_imports(
     for imp in imports {
         match imp.kind {
             ImportKind::Import => {
-                resolve_import_stmt(source_module, imp, index, &mut deps, &mut unresolved);
+                resolve_import_stmt(
+                    source_module,
+                    imp,
+                    index,
+                    &mut deps,
+                    &mut unresolved,
+                    include_ancestor_init,
+                );
             }
             ImportKind::ImportFrom => {
                 resolve_import_from_stmt(
@@ -35,6 +43,7 @@ pub(crate) fn resolve_file_imports(
                     index,
                     &mut deps,
                     &mut unresolved,
+                    include_ancestor_init,
                     source_is_package,
                 );
             }
@@ -42,6 +51,38 @@ pub(crate) fn resolve_file_imports(
     }
 
     FileResolution { deps, unresolved }
+}
+
+/// Emit dependency edges to every first-party ancestor package of `target`.
+///
+/// Importing `a.b.c` executes `a/__init__.py` then `a/b/__init__.py` at
+/// runtime, so every first-party ancestor package of `target` is a genuine
+/// import-time dependency. Each dotted prefix of `target` (excluding the full
+/// target itself) that exists in the index gets an edge, skipping any
+/// self-edge back to `source_module`.
+fn push_ancestor_package_deps(
+    source_module: &str,
+    target: &str,
+    line: u32,
+    index: &ModuleIndex,
+    deps: &mut Vec<ResolvedDep>,
+) {
+    let parts: Vec<&str> = target.split('.').collect();
+    let mut prefix = String::new();
+    // All dotted prefixes EXCEPT the full target itself.
+    for part in &parts[..parts.len().saturating_sub(1)] {
+        if !prefix.is_empty() {
+            prefix.push('.');
+        }
+        prefix.push_str(part);
+        if prefix != source_module && index.contains(&prefix) {
+            deps.push(ResolvedDep {
+                source: source_module.to_string(),
+                target: prefix.clone(),
+                line,
+            });
+        }
+    }
 }
 
 /// Resolve an `import X` statement.
@@ -54,6 +95,7 @@ fn resolve_import_stmt(
     index: &ModuleIndex,
     deps: &mut Vec<ResolvedDep>,
     unresolved: &mut Vec<UnresolvedImport>,
+    include_ancestor_init: bool,
 ) {
     for name in &imp.names {
         if index.contains(&name.name) {
@@ -62,6 +104,9 @@ fn resolve_import_stmt(
                 target: name.name.clone(),
                 line: imp.line,
             });
+            if include_ancestor_init {
+                push_ancestor_package_deps(source_module, &name.name, imp.line, index, deps);
+            }
         } else {
             unresolved.push(UnresolvedImport {
                 source: source_module.to_string(),
@@ -82,6 +127,7 @@ fn resolve_import_from_stmt(
     index: &ModuleIndex,
     deps: &mut Vec<ResolvedDep>,
     unresolved: &mut Vec<UnresolvedImport>,
+    include_ancestor_init: bool,
     source_is_package: bool,
 ) {
     // Step 1: Determine the absolute module path.
@@ -137,6 +183,9 @@ fn resolve_import_from_stmt(
         };
 
         if index.contains(&qualified) {
+            if include_ancestor_init {
+                push_ancestor_package_deps(source_module, &qualified, imp.line, index, deps);
+            }
             deps.push(ResolvedDep {
                 source: source_module.to_string(),
                 target: qualified,
@@ -149,6 +198,9 @@ fn resolve_import_from_stmt(
     // If no imported names resolved as submodules, the names must be symbols
     // inside the base module — add the base module itself as the dependency.
     if !any_resolved && !base_module.is_empty() && index.contains(&base_module) {
+        if include_ancestor_init {
+            push_ancestor_package_deps(source_module, &base_module, imp.line, index, deps);
+        }
         deps.push(ResolvedDep {
             source: source_module.to_string(),
             target: base_module.clone(),
@@ -210,7 +262,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false);
+        let result = resolve_file_imports("app", &imports, &index, false, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].source, "app");
         assert_eq!(result.deps[0].target, "core.engine");
@@ -228,7 +280,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false);
+        let result = resolve_file_imports("app", &imports, &index, false, false);
         assert!(result.deps.is_empty());
         assert_eq!(result.unresolved.len(), 1);
         assert_eq!(result.unresolved[0].import_path, "os");
@@ -245,7 +297,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false);
+        let result = resolve_file_imports("app", &imports, &index, false, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
         assert!(result.unresolved.is_empty());
@@ -263,7 +315,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false);
+        let result = resolve_file_imports("app", &imports, &index, false, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "models.user");
         assert!(result.unresolved.is_empty());
@@ -280,7 +332,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false);
+        let result = resolve_file_imports("app", &imports, &index, false, false);
         assert!(result.deps.is_empty());
         assert_eq!(result.unresolved.len(), 1);
         assert_eq!(result.unresolved[0].import_path, "os");
@@ -297,7 +349,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("services.auth.login", &imports, &index, false);
+        let result = resolve_file_imports("services.auth.login", &imports, &index, false, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "services.auth.session");
     }
@@ -313,7 +365,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("services.auth.tokens", &imports, &index, false);
+        let result = resolve_file_imports("services.auth.tokens", &imports, &index, false, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "services.notifications.email");
     }
@@ -329,7 +381,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("core.runner", &imports, &index, false);
+        let result = resolve_file_imports("core.runner", &imports, &index, false, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
     }
@@ -345,7 +397,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false);
+        let result = resolve_file_imports("app", &imports, &index, false, false);
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert_eq!(targets.len(), 2);
         assert!(targets.contains(&"models.user"));
@@ -365,7 +417,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false);
+        let result = resolve_file_imports("app", &imports, &index, false, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
         assert!(result.unresolved.is_empty());
@@ -382,7 +434,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false);
+        let result = resolve_file_imports("app", &imports, &index, false, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "models");
         assert!(result.unresolved.is_empty());
@@ -399,7 +451,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg.mod", &imports, &index, false);
+        let result = resolve_file_imports("pkg.mod", &imports, &index, false, false);
         assert!(result.deps.is_empty());
         assert_eq!(result.unresolved.len(), 1);
         assert!(result.unresolved[0].import_path.contains("..."));
@@ -432,7 +484,7 @@ mod tests {
             },
         ];
 
-        let result = resolve_file_imports("app", &imports, &index, false);
+        let result = resolve_file_imports("app", &imports, &index, false, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
         assert_eq!(result.unresolved.len(), 2);
@@ -449,7 +501,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false);
+        let result = resolve_file_imports("app", &imports, &index, false, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
     }
@@ -457,7 +509,7 @@ mod tests {
     #[test]
     fn empty_imports() {
         let index = make_index(&["core.engine"]);
-        let result = resolve_file_imports("app", &[], &index, false);
+        let result = resolve_file_imports("app", &[], &index, false, false);
         assert!(result.deps.is_empty());
         assert!(result.unresolved.is_empty());
     }
@@ -473,7 +525,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg.services", &imports, &index, true);
+        let result = resolve_file_imports("pkg.services", &imports, &index, false, true);
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert_eq!(targets, vec!["pkg.services.staff_service"]);
         assert!(result.unresolved.is_empty());
@@ -490,7 +542,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg.services", &imports, &index, true);
+        let result = resolve_file_imports("pkg.services", &imports, &index, false, true);
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert_eq!(targets, vec!["pkg.services.staff_service"]);
         assert!(result.unresolved.is_empty());
@@ -507,7 +559,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg.services.api", &imports, &index, false);
+        let result = resolve_file_imports("pkg.services.api", &imports, &index, false, false);
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert_eq!(targets, vec!["pkg.services.staff_service"]);
         assert!(result.unresolved.is_empty());
@@ -524,8 +576,116 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg.services", &imports, &index, false);
+        let result = resolve_file_imports("pkg.services", &imports, &index, false, false);
         assert!(result.deps.is_empty());
         assert_eq!(result.unresolved.len(), 1);
+    }
+
+    #[test]
+    fn from_import_symbol_adds_ancestor_packages() {
+        let index = make_index(&["a", "a.b", "a.b.c"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::ImportFrom,
+            module: Some("a.b.c".to_string()),
+            names: vec![name("Symbol")],
+            level: 0,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("x", &imports, &index, true, false);
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert!(targets.contains(&"a.b.c"));
+        assert!(targets.contains(&"a.b"));
+        assert!(targets.contains(&"a"));
+        assert_eq!(targets.len(), 3);
+    }
+
+    #[test]
+    fn import_dotted_adds_ancestor_packages() {
+        let index = make_index(&["a", "a.b", "a.b.c"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::Import,
+            module: None,
+            names: vec![name("a.b.c")],
+            level: 0,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("x", &imports, &index, true, false);
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert!(targets.contains(&"a.b.c"));
+        assert!(targets.contains(&"a.b"));
+        assert!(targets.contains(&"a"));
+        assert_eq!(targets.len(), 3);
+    }
+
+    #[test]
+    fn ancestor_deps_skip_self_module() {
+        let index = make_index(&["a", "a.b", "a.b.c"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::Import,
+            module: None,
+            names: vec![name("a.b.c")],
+            level: 0,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("a.b", &imports, &index, true, false);
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert!(targets.contains(&"a.b.c"));
+        assert!(targets.contains(&"a"));
+        assert!(!targets.contains(&"a.b"));
+    }
+
+    #[test]
+    fn submodule_import_adds_parent_init_packages() {
+        let index = make_index(&["pkg", "pkg.sub", "pkg.sub.leaf"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::ImportFrom,
+            module: Some("pkg.sub.leaf".to_string()),
+            names: vec![name("helper")],
+            level: 0,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("other", &imports, &index, true, false);
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert!(targets.contains(&"pkg.sub.leaf"));
+        assert!(targets.contains(&"pkg.sub"));
+        assert!(targets.contains(&"pkg"));
+    }
+
+    #[test]
+    fn submodule_resolution_includes_ancestor_when_enabled() {
+        let index = make_index(&["models", "models.user", "models.base"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::ImportFrom,
+            module: Some("models".to_string()),
+            names: vec![name("user"), name("base")],
+            level: 0,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("app", &imports, &index, true, false);
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert!(targets.contains(&"models.user"));
+        assert!(targets.contains(&"models.base"));
+        assert!(targets.contains(&"models"));
+    }
+
+    #[test]
+    fn ancestor_deps_disabled_when_flag_off() {
+        let index = make_index(&["a", "a.b", "a.b.c"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::ImportFrom,
+            module: Some("a.b.c".to_string()),
+            names: vec![name("Symbol")],
+            level: 0,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("x", &imports, &index, false, false);
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert_eq!(targets, vec!["a.b.c"]);
     }
 }

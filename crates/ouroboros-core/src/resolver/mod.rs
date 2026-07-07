@@ -67,9 +67,16 @@ pub fn resolve_file(
     source_module: &str,
     imports: &[RawImport],
     index: &ModuleIndex,
+    include_ancestor_init: bool,
     source_is_package: bool,
 ) -> FileResolution {
-    resolve::resolve_file_imports(source_module, imports, index, source_is_package)
+    resolve::resolve_file_imports(
+        source_module,
+        imports,
+        index,
+        include_ancestor_init,
+        source_is_package,
+    )
 }
 
 /// Resolve all imports for every discovered file in the project.
@@ -86,6 +93,7 @@ pub fn resolve_all(
     config: &Config,
 ) -> ResolveResult {
     let include_local = config.parse.local_imports;
+    let include_ancestor_init = config.resolve.include_ancestor_init;
     let mut all_deps = Vec::new();
     let mut all_unresolved = Vec::new();
 
@@ -107,7 +115,13 @@ pub fn resolve_all(
                 .rel_path
                 .file_name()
                 .is_some_and(|name| name == "__init__.py");
-            let resolution = resolve_file(&file.module_name, &imports, index, source_is_package);
+            let resolution = resolve_file(
+                &file.module_name,
+                &imports,
+                index,
+                include_ancestor_init,
+                source_is_package,
+            );
             all_deps.extend(resolution.deps);
             all_unresolved.extend(resolution.unresolved);
         }

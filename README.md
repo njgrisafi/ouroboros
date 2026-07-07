@@ -11,6 +11,7 @@ Designed for large monorepos with millions of lines of code.
 - Discovers `.py` files across configurable source roots
 - Extracts `import` and `from ... import` statements (including relative imports)
 - Resolves imports against a first-party module index
+- Accounts for ancestor package `__init__.py` execution (importing `a.b.c` also depends on `a` and `a.b`); toggle with `include-ancestor-init` / `--no-include-ancestor-init`
 - Builds a compact file-level dependency graph
 - Detects circular dependencies via strongly connected components (SCCs)
 - Configurable SCC size filtering, local-import inclusion, and source roots
@@ -67,7 +68,7 @@ oboros --config path/to/oboros.toml
 All CLI flags:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--package] [--dump-ignores] [--strict]
+oboros [--config <FILE>] [--format human|json] [--package] [--dump-ignores] [--strict] [--no-include-ancestor-init]
 ```
 
 See [USAGE.md](USAGE.md) for the full configuration reference and detailed usage instructions.
