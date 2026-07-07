@@ -18,6 +18,7 @@ pub(crate) fn resolve_file_imports(
     source_module: &str,
     imports: &[RawImport],
     index: &ModuleIndex,
+    source_is_package: bool,
 ) -> FileResolution {
     let mut deps = Vec::new();
     let mut unresolved = Vec::new();
@@ -28,7 +29,14 @@ pub(crate) fn resolve_file_imports(
                 resolve_import_stmt(source_module, imp, index, &mut deps, &mut unresolved);
             }
             ImportKind::ImportFrom => {
-                resolve_import_from_stmt(source_module, imp, index, &mut deps, &mut unresolved);
+                resolve_import_from_stmt(
+                    source_module,
+                    imp,
+                    index,
+                    &mut deps,
+                    &mut unresolved,
+                    source_is_package,
+                );
             }
         }
     }
@@ -74,11 +82,19 @@ fn resolve_import_from_stmt(
     index: &ModuleIndex,
     deps: &mut Vec<ResolvedDep>,
     unresolved: &mut Vec<UnresolvedImport>,
+    source_is_package: bool,
 ) {
     // Step 1: Determine the absolute module path.
     let base_module = if imp.level > 0 {
-        // Relative import — resolve to absolute.
-        match resolve_relative(source_module, imp.level, imp.module.as_deref()) {
+        // Relative import — resolve to absolute. Inside a package's
+        // `__init__.py`, a leading dot refers to the package itself, so one
+        // fewer level is stripped than for a regular module.
+        let effective_level = if source_is_package {
+            imp.level.saturating_sub(1)
+        } else {
+            imp.level
+        };
+        match resolve_relative(source_module, effective_level, imp.module.as_deref()) {
             Ok(resolved) => resolved,
             Err(ResolveError::RelativeEscapesRoot { .. }) => {
                 // Cannot resolve — record as unresolved.
@@ -194,7 +210,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index);
+        let result = resolve_file_imports("app", &imports, &index, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].source, "app");
         assert_eq!(result.deps[0].target, "core.engine");
@@ -212,7 +228,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index);
+        let result = resolve_file_imports("app", &imports, &index, false);
         assert!(result.deps.is_empty());
         assert_eq!(result.unresolved.len(), 1);
         assert_eq!(result.unresolved[0].import_path, "os");
@@ -229,7 +245,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index);
+        let result = resolve_file_imports("app", &imports, &index, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
         assert!(result.unresolved.is_empty());
@@ -247,7 +263,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index);
+        let result = resolve_file_imports("app", &imports, &index, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "models.user");
         assert!(result.unresolved.is_empty());
@@ -264,7 +280,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index);
+        let result = resolve_file_imports("app", &imports, &index, false);
         assert!(result.deps.is_empty());
         assert_eq!(result.unresolved.len(), 1);
         assert_eq!(result.unresolved[0].import_path, "os");
@@ -281,7 +297,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("services.auth.login", &imports, &index);
+        let result = resolve_file_imports("services.auth.login", &imports, &index, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "services.auth.session");
     }
@@ -297,7 +313,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("services.auth.tokens", &imports, &index);
+        let result = resolve_file_imports("services.auth.tokens", &imports, &index, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "services.notifications.email");
     }
@@ -313,7 +329,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("core.runner", &imports, &index);
+        let result = resolve_file_imports("core.runner", &imports, &index, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
     }
@@ -329,7 +345,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index);
+        let result = resolve_file_imports("app", &imports, &index, false);
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert_eq!(targets.len(), 2);
         assert!(targets.contains(&"models.user"));
@@ -349,7 +365,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index);
+        let result = resolve_file_imports("app", &imports, &index, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
         assert!(result.unresolved.is_empty());
@@ -366,7 +382,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index);
+        let result = resolve_file_imports("app", &imports, &index, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "models");
         assert!(result.unresolved.is_empty());
@@ -383,7 +399,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg.mod", &imports, &index);
+        let result = resolve_file_imports("pkg.mod", &imports, &index, false);
         assert!(result.deps.is_empty());
         assert_eq!(result.unresolved.len(), 1);
         assert!(result.unresolved[0].import_path.contains("..."));
@@ -416,7 +432,7 @@ mod tests {
             },
         ];
 
-        let result = resolve_file_imports("app", &imports, &index);
+        let result = resolve_file_imports("app", &imports, &index, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
         assert_eq!(result.unresolved.len(), 2);
@@ -433,7 +449,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index);
+        let result = resolve_file_imports("app", &imports, &index, false);
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
     }
@@ -441,8 +457,75 @@ mod tests {
     #[test]
     fn empty_imports() {
         let index = make_index(&["core.engine"]);
-        let result = resolve_file_imports("app", &[], &index);
+        let result = resolve_file_imports("app", &[], &index, false);
         assert!(result.deps.is_empty());
         assert!(result.unresolved.is_empty());
+    }
+
+    #[test]
+    fn relative_import_from_package_init_stays_in_package() {
+        let index = make_index(&["pkg.services", "pkg.services.staff_service"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::ImportFrom,
+            module: Some("staff_service".to_string()),
+            names: vec![name("do_thing")],
+            level: 1,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("pkg.services", &imports, &index, true);
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert_eq!(targets, vec!["pkg.services.staff_service"]);
+        assert!(result.unresolved.is_empty());
+    }
+
+    #[test]
+    fn relative_bare_import_from_package_init_resolves_submodule() {
+        let index = make_index(&["pkg.services", "pkg.services.staff_service"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::ImportFrom,
+            module: None,
+            names: vec![name("staff_service")],
+            level: 1,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("pkg.services", &imports, &index, true);
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert_eq!(targets, vec!["pkg.services.staff_service"]);
+        assert!(result.unresolved.is_empty());
+    }
+
+    #[test]
+    fn relative_import_from_regular_module_ascends_to_parent() {
+        let index = make_index(&["pkg.services.api", "pkg.services.staff_service"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::ImportFrom,
+            module: Some("staff_service".to_string()),
+            names: vec![name("do_thing")],
+            level: 1,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("pkg.services.api", &imports, &index, false);
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert_eq!(targets, vec!["pkg.services.staff_service"]);
+        assert!(result.unresolved.is_empty());
+    }
+
+    #[test]
+    fn regular_module_relative_import_does_not_stay_in_self() {
+        let index = make_index(&["pkg.services", "pkg.services.staff_service"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::ImportFrom,
+            module: Some("staff_service".to_string()),
+            names: vec![name("do_thing")],
+            level: 1,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("pkg.services", &imports, &index, false);
+        assert!(result.deps.is_empty());
+        assert_eq!(result.unresolved.len(), 1);
     }
 }

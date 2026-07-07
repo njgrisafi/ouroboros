@@ -67,8 +67,9 @@ pub fn resolve_file(
     source_module: &str,
     imports: &[RawImport],
     index: &ModuleIndex,
+    source_is_package: bool,
 ) -> FileResolution {
-    resolve::resolve_file_imports(source_module, imports, index)
+    resolve::resolve_file_imports(source_module, imports, index, source_is_package)
 }
 
 /// Resolve all imports for every discovered file in the project.
@@ -102,7 +103,11 @@ pub fn resolve_all(
                 Err(_) => continue,
             };
 
-            let resolution = resolve_file(&file.module_name, &imports, index);
+            let source_is_package = file
+                .rel_path
+                .file_name()
+                .is_some_and(|name| name == "__init__.py");
+            let resolution = resolve_file(&file.module_name, &imports, index, source_is_package);
             all_deps.extend(resolution.deps);
             all_unresolved.extend(resolution.unresolved);
         }
