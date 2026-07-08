@@ -5,7 +5,7 @@
 The binary is called `oboros`. Usage:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--package] [--dump-ignores] [--strict]
+oboros [--config <FILE>] [--format human|json] [--package] [--dump-ignores] [--strict] [--no-include-ancestor-init]
 ```
 
 | Flag | Description |
@@ -15,8 +15,9 @@ oboros [--config <FILE>] [--format human|json] [--package] [--dump-ignores] [--s
 | `--package` | Only report cycles where all files belong to the same top-level package. Cross-package cycles are excluded. See [Intra-package filtering](#intra-package-filtering---package). |
 | `--dump-ignores` | Print ignore entries for all detected cycles, then exit. With `--format human` (default), prints TOML fragments. With `--format json`, prints a JSON object. |
 | `--strict` | Exit with code 1 if any (non-suppressed) cycles are detected. Works with both output formats. |
+| `--no-include-ancestor-init` | Disable ancestor-package `__init__.py` edges. Overrides `include-ancestor-init` in config. See [`[resolve]` section](#resolve-section). |
 
-If no config file is found, built-in defaults are used (source root: `src`, top-level imports only, minimum SCC size: 2).
+If no config file is found, built-in defaults are used (source root: `src`, top-level imports only, minimum SCC size: 2, ancestor `__init__.py` edges enabled).
 
 ### Examples
 
@@ -53,6 +54,9 @@ source-roots = ["src", "lib"]
 [parse]
 local-imports = true
 
+[resolve]
+include-ancestor-init = true
+
 [cycles]
 min-scc-size = 2
 max-scc-size = 10
@@ -88,6 +92,27 @@ Setting `local-imports = true` is useful when your codebase uses deferred import
 [parse]
 local-imports = true
 ```
+
+#### `[resolve]` section
+
+Controls how resolved imports are turned into dependency edges.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `include-ancestor-init` | `bool` | `true` | Whether to also record dependency edges to the `__init__.py` of every first-party ancestor package of an imported module. |
+
+Importing `a.b.c` causes Python to execute `a/__init__.py` and `a/b/__init__.py` at import time, so those ancestor packages are genuine import-time dependencies. When `include-ancestor-init = true` (the default), Ouroboros records edges to them. This surfaces real cycles that close through an eager parent `__init__.py` — for example when `beta/helpers.py` imports `alpha.core`, which executes `alpha/__init__.py`, which in turn re-exports something from `beta`.
+
+Edges are **not** recorded to the importing module's *own* ancestor packages. When `alpha.sub.mod` imports a sibling, `alpha` and `alpha.sub` are already initialized on `alpha.sub.mod`'s own import path, so no `alpha.sub.mod -> alpha` edge is added. This is what prevents false cycles when a package `__init__.py` re-exports one of its submodules (the submodule importing another sibling does not re-enter the parent).
+
+Set `include-ancestor-init = false` (or pass `--no-include-ancestor-init`) to restrict edges to the deepest resolved module only, matching the pre-1.0 behavior. The CLI flag takes precedence over the config value.
+
+```toml
+[resolve]
+include-ancestor-init = false
+```
+
+Enabling this option may increase the number of reported cycles, since it exposes previously-hidden latent cycles. Passive `__init__.py` files (those with no first-party imports of their own) can be edge targets but can never be part of a cycle, so they do not produce false positives.
 
 #### `[cycles]` section
 
@@ -360,6 +385,10 @@ The leading dot is interpreted with Python's package semantics: inside a package
 - in `pkg/services/api.py` (module `pkg.services.api`) also resolves to `pkg.services.staff`
 
 Handling `__init__.py` correctly is required to detect cycles that close through an eager `__init__.py` re-export (a package `__init__` that imports its own submodules).
+
+### Ancestor package `__init__.py` edges
+
+Whenever an import resolves to a first-party module, Ouroboros (by default) also records edges to every first-party ancestor package on the path. Importing `a.b.c` executes `a/__init__.py` and `a/b/__init__.py` at import time, so `a` and `a.b` are treated as dependencies of the importing file too. Ancestor packages that already **contain** the importing module are skipped (they are guaranteed initialized before the module runs), so importing a sibling never adds an edge back to a shared parent package. This is controlled by [`include-ancestor-init`](#resolve-section) and can be disabled with `--no-include-ancestor-init`.
 
 ### `__init__.py` ownership
 

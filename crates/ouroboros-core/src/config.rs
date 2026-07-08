@@ -45,6 +45,10 @@ pub struct Config {
     #[serde(default)]
     pub parse: ParseConfig,
 
+    /// Resolver configuration.
+    #[serde(default)]
+    pub resolve: ResolveConfig,
+
     /// Cycle reporting configuration.
     #[serde(default)]
     pub cycles: CyclesConfig,
@@ -60,6 +64,32 @@ pub struct ParseConfig {
     /// considered when building the dependency graph.
     #[serde(rename = "local-imports", default)]
     pub local_imports: bool,
+}
+
+/// Configuration for the resolver subsystem.
+#[derive(Debug, Deserialize, PartialEq)]
+pub struct ResolveConfig {
+    /// Whether to also record dependency edges to the `__init__.py` files of
+    /// every first-party ancestor package of an imported module.
+    ///
+    /// Importing `a.b.c` executes `a/__init__.py` and `a/b/__init__.py` at
+    /// runtime, so those ancestor packages are genuine import-time
+    /// dependencies. Enabling this surfaces real cycles that pass through an
+    /// eager parent `__init__.py`. Defaults to `true`.
+    #[serde(rename = "include-ancestor-init", default = "default_true")]
+    pub include_ancestor_init: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for ResolveConfig {
+    fn default() -> Self {
+        ResolveConfig {
+            include_ancestor_init: true,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, PartialEq, Clone)]
@@ -140,6 +170,7 @@ impl Default for Config {
         Config {
             source_roots: vec!["src".to_string()],
             parse: ParseConfig::default(),
+            resolve: ResolveConfig::default(),
             cycles: CyclesConfig::default(),
         }
     }
@@ -181,6 +212,36 @@ local-imports = true
     }
 
     #[test]
+    fn include_ancestor_init_defaults_to_true() {
+        let toml_str = r#"source-roots = ["src"]"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert!(config.resolve.include_ancestor_init);
+    }
+
+    #[test]
+    fn resolve_section_can_disable_ancestor_init() {
+        let toml_str = r#"
+source-roots = ["src"]
+
+[resolve]
+include-ancestor-init = false
+"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert!(!config.resolve.include_ancestor_init);
+    }
+
+    #[test]
+    fn empty_resolve_section_keeps_default_true() {
+        let toml_str = r#"
+source-roots = ["src"]
+
+[resolve]
+"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert!(config.resolve.include_ancestor_init);
+    }
+
+    #[test]
     fn missing_source_roots_is_error() {
         let toml_str = "";
         let result = Config::from_toml(toml_str);
@@ -192,6 +253,7 @@ local-imports = true
         let config = Config::default();
         assert_eq!(config.source_roots, vec!["src".to_string()]);
         assert!(!config.parse.local_imports);
+        assert!(config.resolve.include_ancestor_init);
         assert_eq!(config.cycles.min_scc_size, 2);
         assert_eq!(config.cycles.max_scc_size, None);
     }

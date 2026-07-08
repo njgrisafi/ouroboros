@@ -61,6 +61,11 @@ struct Cli {
     #[arg(long)]
     package: bool,
 
+    /// Do not record import edges to ancestor package __init__.py files
+    /// (importing `a.b.c` normally also depends on `a` and `a.b`).
+    #[arg(long = "no-include-ancestor-init")]
+    no_include_ancestor_init: bool,
+
     /// Show detailed intermediate output (discovery, imports, graph).
     #[arg(long, short)]
     verbose: bool,
@@ -120,7 +125,7 @@ fn main() {
     let verbose = is_human && cli.verbose;
     let spinner = make_spinner(is_human && !cli.verbose);
 
-    let (config, project_root) = match config_path {
+    let (mut config, project_root) = match config_path {
         Some(path) => {
             if verbose {
                 println!("found config: {}", path.display());
@@ -140,6 +145,11 @@ fn main() {
             (Config::default(), cwd.clone())
         }
     };
+
+    // CLI flag overrides config: --no-include-ancestor-init forces the option off.
+    if cli.no_include_ancestor_init {
+        config.resolve.include_ancestor_init = false;
+    }
 
     if verbose {
         println!("{config:#?}");
