@@ -370,7 +370,10 @@ fn html_report_with_traced_contains_cycle_impact_section() {
     );
 
     let traces_path = std::env::temp_dir().join("oboros_trace_test_trace_app.html");
-    assert!(traces_path.exists(), "per-trace file should be written alongside report");
+    assert!(
+        traces_path.exists(),
+        "per-trace file should be written alongside report"
+    );
     let traces_html = fs::read_to_string(&traces_path).unwrap();
     assert!(
         traces_html.contains("reachable"),

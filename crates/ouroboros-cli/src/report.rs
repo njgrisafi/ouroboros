@@ -376,11 +376,7 @@ fn write_head(html: &mut String, date: &str) {
     );
 }
 
-fn write_nav(
-    html: &mut String,
-    stats: &ReportStats,
-    traced: &[crate::output::JsonTrace],
-) {
+fn write_nav(html: &mut String, stats: &ReportStats, traced: &[crate::output::JsonTrace]) {
     html.push_str("    <nav class=\"toc\">\n");
     html.push_str("        <div class=\"toc-title\">Jump to</div>\n");
     html.push_str("        <ul class=\"toc-list\">\n");
@@ -576,7 +572,9 @@ fn write_cycle_impact_index(
     }
 
     html.push_str("    <span id=\"cycle-impact\" class=\"section-anchor\"></span>\n");
-    html.push_str("\n    <h2>Cycle Impact <a href=\"#top\" class=\"back-top\">\u{2191} top</a></h2>\n");
+    html.push_str(
+        "\n    <h2>Cycle Impact <a href=\"#top\" class=\"back-top\">\u{2191} top</a></h2>\n",
+    );
 
     html.push_str("    <table>\n");
     html.push_str("        <tr><th>Path</th><th>Kind</th><th>Impact</th><th></th></tr>\n");
@@ -593,8 +591,11 @@ fn write_cycle_impact_index(
             }
         } else {
             let impacted = trace.files.iter().any(|f| !f.impacts.is_empty());
-            if impacted { "impacted".to_string() }
-            else { "<span style=\"color:#888\">not impacted</span>".to_string() }
+            if impacted {
+                "impacted".to_string()
+            } else {
+                "<span style=\"color:#888\">not impacted</span>".to_string()
+            }
         };
         let _ = writeln!(
             html,
@@ -757,44 +758,64 @@ fn write_trace_page_body(
     let is_dir = trace.kind == "directory";
     let total_files = trace.files.len();
     let impacted_files = trace.files.iter().filter(|f| !f.impacts.is_empty()).count();
-    let member_files = trace.files.iter()
+    let member_files = trace
+        .files
+        .iter()
         .filter(|f| f.impacts.iter().any(|imp| imp.relationship == "member"))
         .count();
-    let reachable_files = trace.files.iter()
+    let reachable_files = trace
+        .files
+        .iter()
         .filter(|f| {
             f.impacts.iter().any(|imp| imp.relationship == "reachable")
-            && !f.impacts.iter().any(|imp| imp.relationship == "member")
+                && !f.impacts.iter().any(|imp| imp.relationship == "member")
         })
         .count();
-    let unique_cycle_count = trace.files.iter()
+    let unique_cycle_count = trace
+        .files
+        .iter()
         .flat_map(|f| f.impacts.iter().map(|imp| imp.cycle_index))
         .collect::<std::collections::BTreeSet<_>>()
         .len();
 
     if impacted_files > 0 {
         html.push_str("    <div class=\"stats\">\n");
-        let _ = writeln!(html,
+        let _ = writeln!(
+            html,
             "        <div class=\"stat\"><span class=\"stat-value\">{unique_cycle_count}</span><span class=\"stat-label\">Cycle{}</span></div>",
-            if unique_cycle_count == 1 { "" } else { "s" });
-        let _ = writeln!(html,
-            "        <div class=\"stat\"><span class=\"stat-value\">{impacted_files}</span><span class=\"stat-label\">Impacted</span></div>");
+            if unique_cycle_count == 1 { "" } else { "s" }
+        );
+        let _ = writeln!(
+            html,
+            "        <div class=\"stat\"><span class=\"stat-value\">{impacted_files}</span><span class=\"stat-label\">Impacted</span></div>"
+        );
         if is_dir {
-            let _ = writeln!(html,
-                "        <div class=\"stat\"><span class=\"stat-value\">{total_files}</span><span class=\"stat-label\">Scanned</span></div>");
+            let _ = writeln!(
+                html,
+                "        <div class=\"stat\"><span class=\"stat-value\">{total_files}</span><span class=\"stat-label\">Scanned</span></div>"
+            );
         }
         if member_files > 0 {
-            let _ = writeln!(html,
-                "        <div class=\"stat stat-member\"><span class=\"stat-value\">{member_files}</span><span class=\"stat-label\">In cycle</span></div>");
+            let _ = writeln!(
+                html,
+                "        <div class=\"stat stat-member\"><span class=\"stat-value\">{member_files}</span><span class=\"stat-label\">In cycle</span></div>"
+            );
         }
         if reachable_files > 0 {
-            let _ = writeln!(html,
-                "        <div class=\"stat stat-reachable\"><span class=\"stat-value\">{reachable_files}</span><span class=\"stat-label\">Leads into cycle</span></div>");
+            let _ = writeln!(
+                html,
+                "        <div class=\"stat stat-reachable\"><span class=\"stat-value\">{reachable_files}</span><span class=\"stat-label\">Leads into cycle</span></div>"
+            );
         }
         html.push_str("    </div>\n");
     }
 
     let files_to_show: Vec<_> = if is_dir {
-        trace.files.iter().filter(|f| !f.impacts.is_empty()).collect()
+        trace
+            .files
+            .iter()
+            .filter(|f| !f.impacts.is_empty())
+            .collect()
     } else {
         trace.files.iter().collect()
     };
@@ -804,7 +825,8 @@ fn write_trace_page_body(
         return;
     }
 
-    let cycle_ids: std::collections::BTreeSet<usize> = files_to_show.iter()
+    let cycle_ids: std::collections::BTreeSet<usize> = files_to_show
+        .iter()
         .flat_map(|f| f.impacts.iter().map(|imp| imp.cycle_index))
         .collect();
 
@@ -815,20 +837,41 @@ fn write_trace_page_body(
         html.push_str("        <tbody>\n");
         for &cid in &cycle_ids {
             let scc_size = cycle_size_map.get(&cid).copied().unwrap_or(0);
-            let members = files_to_show.iter()
-                .filter(|f| f.impacts.iter().any(|imp| imp.cycle_index == cid && imp.relationship == "member"))
-                .count();
-            let reachable = files_to_show.iter()
+            let members = files_to_show
+                .iter()
                 .filter(|f| {
-                    f.impacts.iter().any(|imp| imp.cycle_index == cid && imp.relationship == "reachable")
-                    && !f.impacts.iter().any(|imp| imp.cycle_index == cid && imp.relationship == "member")
+                    f.impacts
+                        .iter()
+                        .any(|imp| imp.cycle_index == cid && imp.relationship == "member")
+                })
+                .count();
+            let reachable = files_to_show
+                .iter()
+                .filter(|f| {
+                    f.impacts
+                        .iter()
+                        .any(|imp| imp.cycle_index == cid && imp.relationship == "reachable")
+                        && !f
+                            .impacts
+                            .iter()
+                            .any(|imp| imp.cycle_index == cid && imp.relationship == "member")
                 })
                 .count();
             let total = members + reachable;
-            let members_cell = if members > 0 { format!("<span class=\"dist-members\">{members}</span>") } else { "<span style=\"color:#ccc\">\u{2014}</span>".to_string() };
-            let reachable_cell = if reachable > 0 { format!("<span class=\"dist-reachable\">{reachable}</span>") } else { "<span style=\"color:#ccc\">\u{2014}</span>".to_string() };
-            let _ = writeln!(html,
-                "            <tr><td><a href=\"{report_filename}#cycle-{cid}\" class=\"cycle-ref\">cycle {cid}</a></td><td class=\"dist-num\">{scc_size}</td><td class=\"dist-num\">{members_cell}</td><td class=\"dist-num\">{reachable_cell}</td><td class=\"dist-num\">{total}</td></tr>");
+            let members_cell = if members > 0 {
+                format!("<span class=\"dist-members\">{members}</span>")
+            } else {
+                "<span style=\"color:#ccc\">\u{2014}</span>".to_string()
+            };
+            let reachable_cell = if reachable > 0 {
+                format!("<span class=\"dist-reachable\">{reachable}</span>")
+            } else {
+                "<span style=\"color:#ccc\">\u{2014}</span>".to_string()
+            };
+            let _ = writeln!(
+                html,
+                "            <tr><td><a href=\"{report_filename}#cycle-{cid}\" class=\"cycle-ref\">cycle {cid}</a></td><td class=\"dist-num\">{scc_size}</td><td class=\"dist-num\">{members_cell}</td><td class=\"dist-num\">{reachable_cell}</td><td class=\"dist-num\">{total}</td></tr>"
+            );
         }
         html.push_str("        </tbody>\n");
         html.push_str("    </table>\n");
@@ -836,7 +879,8 @@ fn write_trace_page_body(
 
     // Distribution by SCC size
     {
-        let mut size_counts: std::collections::BTreeMap<usize, usize> = std::collections::BTreeMap::new();
+        let mut size_counts: std::collections::BTreeMap<usize, usize> =
+            std::collections::BTreeMap::new();
         for &cid in &cycle_ids {
             let sz = cycle_size_map.get(&cid).copied().unwrap_or(0);
             *size_counts.entry(sz).or_default() += 1;
@@ -849,8 +893,10 @@ fn write_trace_page_body(
             html.push_str("        <tbody>\n");
             for (&sz, &count) in &size_counts {
                 let pct = (count as f64 / max_count as f64 * 100.0) as u32;
-                let _ = writeln!(html,
-                    "            <tr><td>{sz}</td><td class=\"dist-num\">{count}</td><td class=\"dist-bar-cell\"><div class=\"dist-bar-track\"><div class=\"dist-bar-fill\" style=\"width:{pct}%\"></div></div></td></tr>");
+                let _ = writeln!(
+                    html,
+                    "            <tr><td>{sz}</td><td class=\"dist-num\">{count}</td><td class=\"dist-bar-cell\"><div class=\"dist-bar-track\"><div class=\"dist-bar-fill\" style=\"width:{pct}%\"></div></div></td></tr>"
+                );
             }
             html.push_str("        </tbody>\n");
             html.push_str("    </table>\n");
@@ -861,31 +907,48 @@ fn write_trace_page_body(
     let mut rows_json = String::from("[");
     let mut first = true;
     for file in &files_to_show {
-        if file.impacts.is_empty() { continue; }
-        if !first { rows_json.push(','); }
+        if file.impacts.is_empty() {
+            continue;
+        }
+        if !first {
+            rows_json.push(',');
+        }
         first = false;
 
         let is_member = file.impacts.iter().any(|imp| imp.relationship == "member");
         let kind = if is_member { "m" } else { "r" };
 
-        let all_lines: std::collections::BTreeSet<u32> = file.impacts.iter()
+        let all_lines: std::collections::BTreeSet<u32> = file
+            .impacts
+            .iter()
             .flat_map(|imp| imp.from_lines.iter().copied())
             .collect();
-        let lines_str = all_lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join(",");
+        let lines_str = all_lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
 
-        let file_cycle_ids: std::collections::BTreeSet<usize> = file.impacts.iter()
-            .map(|imp| imp.cycle_index)
-            .collect();
-        let cycles_str = file_cycle_ids.iter().map(|c| c.to_string()).collect::<Vec<_>>().join(",");
+        let file_cycle_ids: std::collections::BTreeSet<usize> =
+            file.impacts.iter().map(|imp| imp.cycle_index).collect();
+        let cycles_str = file_cycle_ids
+            .iter()
+            .map(|c| c.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
 
-        let max_scc: usize = file_cycle_ids.iter()
+        let max_scc: usize = file_cycle_ids
+            .iter()
             .filter_map(|cid| cycle_size_map.get(cid))
             .copied()
             .max()
             .unwrap_or(0);
 
         let file_escaped = file.path.replace('\\', "\\\\").replace('"', "\\\"");
-        let _ = write!(rows_json, "[\"{file_escaped}\",\"{kind}\",\"{lines_str}\",\"{cycles_str}\",{max_scc}]");
+        let _ = write!(
+            rows_json,
+            "[\"{file_escaped}\",\"{kind}\",\"{lines_str}\",\"{cycles_str}\",{max_scc}]"
+        );
     }
     rows_json.push(']');
 
@@ -893,12 +956,14 @@ fn write_trace_page_body(
     html.push_str("    <div id=\"vlist-wrap\">\n");
     html.push_str("        <div class=\"vlist-toolbar\"><input id=\"vlist-search\" type=\"text\" placeholder=\"Filter files\u{2026}\" class=\"vlist-search-input\"><span id=\"vlist-count\" class=\"vlist-count\"></span></div>\n");
     html.push_str("        <table class=\"impact-table\" id=\"vlist-table\">\n");
-    html.push_str("            <thead><tr>\
+    html.push_str(
+        "            <thead><tr>\
         <th data-sort=\"str\" data-col=\"0\">File</th>\
         <th data-sort=\"num\" data-col=\"2\" class=\"num\">Import lines</th>\
         <th data-sort=\"num\" data-col=\"3\" class=\"num\">Cycles</th>\
         <th data-sort=\"num\" data-col=\"4\" class=\"num\">Max SCC</th>\
-    </tr></thead>\n");
+    </tr></thead>\n",
+    );
     html.push_str("        </table>\n");
     html.push_str("        <div id=\"vlist-sentinel\"></div>\n");
     html.push_str("    </div>\n");
@@ -907,7 +972,10 @@ fn write_trace_page_body(
     let _ = writeln!(html, "    (function(){{");
     let _ = writeln!(html, "    var ALL={rows_json};");
     let report_escaped = report_filename.replace('\\', "\\\\").replace('"', "\\\"");
-    let _ = writeln!(html, "    var filtered=ALL, sortCol=null, sortAsc=true, page=0, PAGE=50, report=\"{report_escaped}\";");
+    let _ = writeln!(
+        html,
+        "    var filtered=ALL, sortCol=null, sortAsc=true, page=0, PAGE=50, report=\"{report_escaped}\";"
+    );
     html.push_str(r#"    function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML;}
     function cycleBadges(cycles){
         var ids=cycles.split(',');
@@ -1115,9 +1183,8 @@ pub fn run(input: &Path, output: &Path, source_root: Option<&Path>) {
     eprintln!("report written to {}", output.display());
 
     let date = Local::now().format("%Y-%m-%d").to_string();
-    let cycle_size_map: std::collections::HashMap<usize, usize> = report.cycles.iter()
-        .map(|c| (c.index, c.size))
-        .collect();
+    let cycle_size_map: std::collections::HashMap<usize, usize> =
+        report.cycles.iter().map(|c| (c.index, c.size)).collect();
     for (i, trace) in report.traced.iter().enumerate() {
         let page_name = trace_page_filename(&output_stem, i, &trace.path);
         let page_path = output_dir.join(&page_name);
@@ -1129,7 +1196,6 @@ pub fn run(input: &Path, output: &Path, source_root: Option<&Path>) {
         eprintln!("trace report written to {}", page_path.display());
     }
 }
-
 
 #[cfg(test)]
 mod tests {
