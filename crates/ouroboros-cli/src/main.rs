@@ -61,6 +61,17 @@ struct Cli {
     #[arg(long)]
     package: bool,
 
+    /// Report cycles that impact the given file or directory path(s), relative to a
+    /// source root (e.g. `app/mod.py` or `app/sub/`). Repeatable and/or comma-separated.
+    /// When omitted, output is identical to today.
+    #[arg(
+        long = "trace",
+        short = 't',
+        value_name = "PATH",
+        value_delimiter = ','
+    )]
+    traces: Vec<String>,
+
     /// Do not record import edges to ancestor package __init__.py files
     /// (importing `a.b.c` normally also depends on `a` and `a.b`).
     #[arg(long = "no-include-ancestor-init")]
@@ -98,6 +109,48 @@ fn make_spinner(verbose: bool) -> ProgressBar {
     );
     pb.enable_steady_tick(std::time::Duration::from_millis(80));
     pb
+}
+
+fn print_file_impacts(file: &output::JsonTraceFile) {
+    println!(
+        "    impacted by {} cycle{}:",
+        file.impacts.len(),
+        if file.impacts.len() == 1 { "" } else { "s" }
+    );
+    for impact in &file.impacts {
+        if impact.relationship == "member" {
+            println!("      cycle {} (member)", impact.cycle_index);
+        } else {
+            let chain = build_reachable_chain(&impact.path, &impact.entry);
+            println!(
+                "      cycle {} (reachable via {})",
+                impact.cycle_index, chain
+            );
+        }
+    }
+}
+
+fn build_reachable_chain(hops: &[output::JsonBranchHop], entry: &str) -> String {
+    let mut parts: Vec<String> = hops
+        .iter()
+        .map(|hop| {
+            let lines_str = hop
+                .lines
+                .iter()
+                .map(|l| l.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{}:{}", hop.from, lines_str)
+        })
+        .collect();
+    parts.push(entry.to_string());
+    parts.join(" -> ")
+}
+
+fn traced_has_impacts(traced: &[output::JsonTrace]) -> bool {
+    traced
+        .iter()
+        .any(|trace| trace.files.iter().any(|file| !file.impacts.is_empty()))
 }
 
 fn main() {
@@ -330,20 +383,7 @@ fn main() {
                 println!("(filtered to intra-package cycles)");
             }
 
-            let mut cycle_data: Vec<(Vec<String>, &Vec<PathBuf>)> = cycles
-                .iter()
-                .map(|cycle| (output::packages_for_cycle(cycle), cycle))
-                .collect();
-
-            cycle_data.sort_by(|a, b| {
-                let pkg_ord = match (a.0.first(), b.0.first()) {
-                    (Some(pa), Some(pb)) => pa.cmp(pb),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => std::cmp::Ordering::Equal,
-                };
-                pkg_ord.then_with(|| a.1.len().cmp(&b.1.len()))
-            });
+            let cycle_data = output::order_cycles(&cycles);
 
             let mut current_packages: Option<&Vec<String>> = None;
             let mut group_count = 0;
@@ -399,15 +439,109 @@ fn main() {
                     }
                 }
             }
+
+            let trace_result = if cli.traces.is_empty() {
+                None
+            } else {
+                Some(output::build_traces(
+                    &cli.traces,
+                    &cycles,
+                    &graph_result.graph,
+                    &graph_result.edge_metadata,
+                    &config.source_roots,
+                ))
+            };
+
+            if let Some((ref traced, ref unknown_paths)) = trace_result {
+                println!("\n--- cycle impact ---");
+
+                for trace in traced {
+                    let is_dir = trace.kind == "directory";
+
+                    if is_dir {
+                        let total = trace.files.len();
+                        let impacted = trace
+                            .files
+                            .iter()
+                            .filter(|file| !file.impacts.is_empty())
+                            .count();
+                        println!(
+                            "\ntrace: {} (directory, {} of {} files impacted)",
+                            trace.path, impacted, total
+                        );
+                    } else {
+                        println!("\ntrace: {} (file)", trace.path);
+                    }
+
+                    if is_dir {
+                        let impacted_files: Vec<_> = trace
+                            .files
+                            .iter()
+                            .filter(|file| !file.impacts.is_empty())
+                            .collect();
+                        if impacted_files.is_empty() {
+                            println!("  no cycles impact this path");
+                        } else {
+                            for file in impacted_files {
+                                println!("  {}:", file.path);
+                                print_file_impacts(file);
+                            }
+                        }
+                    } else if let Some(file) = trace.files.first() {
+                        if file.impacts.is_empty() {
+                            println!("  not impacted by any cycle");
+                        } else {
+                            print_file_impacts(file);
+                        }
+                    }
+                }
+
+                if !unknown_paths.is_empty() {
+                    println!("\n(unknown paths: {})", unknown_paths.join(", "));
+                }
+            }
+
+            if cli.strict {
+                if let Some((ref traced, _)) = trace_result {
+                    if traced_has_impacts(traced) {
+                        std::process::exit(1);
+                    }
+                } else if !cycles.is_empty() {
+                    std::process::exit(1);
+                }
+            }
         }
         OutputFormat::Json => {
-            let report =
-                output::build_json_report(&cycles, suppressed_count, &graph_result.edge_metadata);
+            let (traced, unknown_paths) = if cli.traces.is_empty() {
+                (vec![], vec![])
+            } else {
+                output::build_traces(
+                    &cli.traces,
+                    &cycles,
+                    &graph_result.graph,
+                    &graph_result.edge_metadata,
+                    &config.source_roots,
+                )
+            };
+            let has_trace_impacts = traced_has_impacts(&traced);
+            let report = output::build_json_report(
+                &cycles,
+                suppressed_count,
+                &graph_result.edge_metadata,
+                traced,
+                unknown_paths,
+            );
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
-        }
-    }
 
-    if cli.strict && !cycles.is_empty() {
-        std::process::exit(1);
+            if cli.strict {
+                if cli.traces.is_empty() {
+                    if !cycles.is_empty() {
+                        std::process::exit(1);
+                    }
+                } else if has_trace_impacts {
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 }
