@@ -68,7 +68,7 @@ oboros --config path/to/oboros.toml
 All CLI flags:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--package] [--dump-ignores] [--strict] [--no-include-ancestor-init]
+oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--strict] [--no-include-ancestor-init]
 ```
 
 See [USAGE.md](USAGE.md) for the full configuration reference and detailed usage instructions.
