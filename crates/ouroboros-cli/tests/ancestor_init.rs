@@ -25,7 +25,8 @@ fn run(extra_args: &[&str]) -> serde_json::Value {
         .expect("failed to run oboros");
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("stdout should be valid JSON: {e}\nstdout: {stdout}"))
+    serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout should be valid JSON: {e}\nstdout: {stdout}"))
 }
 
 #[test]
