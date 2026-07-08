@@ -53,13 +53,36 @@ pub(crate) fn resolve_file_imports(
     FileResolution { deps, unresolved }
 }
 
-/// Emit dependency edges to every first-party ancestor package of `target`.
+/// Returns `true` if `candidate` is `module` itself or one of its dotted-prefix
+/// ancestor packages.
+///
+/// Examples: `is_ancestor_or_self("common.s3", "common.s3.buckets")` is `true`,
+/// `is_ancestor_or_self("common", "common.s3.buckets")` is `true`,
+/// `is_ancestor_or_self("common.s3", "common.s3")` is `true`, and
+/// `is_ancestor_or_self("hub", "hris.x")` is `false`. The byte-boundary check
+/// prevents `common.s3` from matching a sibling like `common.s33`.
+fn is_ancestor_or_self(candidate: &str, module: &str) -> bool {
+    module == candidate
+        || (module.len() > candidate.len()
+            && module.as_bytes()[candidate.len()] == b'.'
+            && module.starts_with(candidate))
+}
+
+/// Emit dependency edges to the first-party ancestor packages of `target`.
 ///
 /// Importing `a.b.c` executes `a/__init__.py` then `a/b/__init__.py` at
-/// runtime, so every first-party ancestor package of `target` is a genuine
-/// import-time dependency. Each dotted prefix of `target` (excluding the full
-/// target itself) that exists in the index gets an edge, skipping any
-/// self-edge back to `source_module`.
+/// runtime, so first-party ancestor packages of `target` are genuine
+/// import-time dependencies. Each dotted prefix of `target` (excluding the full
+/// target itself) that exists in the index gets an edge — EXCEPT any prefix
+/// that is an ancestor-or-self of `source_module`.
+///
+/// Skipping ancestor-or-self prefixes avoids fabricating cycles: when the
+/// importing module already lives inside package `P` (e.g. `P.buckets` imports
+/// a sibling `P.other`), `P`'s `__init__.py` is already on the import stack, so
+/// an edge `P.buckets -> P` is not a new dependency. Emitting it would create a
+/// bogus `P <-> P.buckets` cycle whenever `P/__init__.py` re-exports a
+/// submodule. Cross-tree ancestor edges (e.g. `hris.x` importing `hub.y` yields
+/// an edge to `hub`) are real and preserved.
 fn push_ancestor_package_deps(
     source_module: &str,
     target: &str,
@@ -75,7 +98,10 @@ fn push_ancestor_package_deps(
             prefix.push('.');
         }
         prefix.push_str(part);
-        if prefix != source_module && index.contains(&prefix) {
+        // Skip prefixes that are the source module or one of its ancestor
+        // packages — those are already initialized on the source's own import
+        // path, so edging back to them fabricates self-tree cycles.
+        if !is_ancestor_or_self(&prefix, source_module) && index.contains(&prefix) {
             deps.push(ResolvedDep {
                 source: source_module.to_string(),
                 target: prefix.clone(),
@@ -620,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn ancestor_deps_skip_self_module() {
+    fn ancestor_deps_skip_self_and_ancestors_of_source() {
         let index = make_index(&["a", "a.b", "a.b.c"]);
         let imports = vec![RawImport {
             kind: ImportKind::Import,
@@ -632,9 +658,58 @@ mod tests {
 
         let result = resolve_file_imports("a.b", &imports, &index, true, false);
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
-        assert!(targets.contains(&"a.b.c"));
-        assert!(targets.contains(&"a"));
-        assert!(!targets.contains(&"a.b"));
+        // `a` and `a.b` are ancestors of the source `a.b`, already initialized
+        // on its own import path, so neither gets a synthetic ancestor edge.
+        assert_eq!(targets, vec!["a.b.c"]);
+    }
+
+    #[test]
+    fn ancestor_deps_skip_ancestor_of_source_avoids_false_cycle() {
+        // Mirrors the real-world false positive: `common.s3.buckets` imports a
+        // sibling `common.s3.other`. Ancestors `common.s3` and `common` are
+        // already loaded before buckets.py runs, so edging back to them would
+        // fabricate a `common.s3 <-> common.s3.buckets` cycle once
+        // `common/s3/__init__.py` re-exports buckets.
+        let index = make_index(&[
+            "common",
+            "common.s3",
+            "common.s3.buckets",
+            "common.s3.other",
+        ]);
+        let imports = vec![RawImport {
+            kind: ImportKind::Import,
+            module: None,
+            names: vec![name("common.s3.other")],
+            level: 0,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("common.s3.buckets", &imports, &index, true, false);
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert!(targets.contains(&"common.s3.other"));
+        assert!(!targets.contains(&"common.s3"));
+        assert!(!targets.contains(&"common"));
+    }
+
+    #[test]
+    fn ancestor_deps_keep_cross_tree_ancestor() {
+        // Cross-tree ancestor edges are real: importing `hub.core.util` from
+        // `hris.models.employee` genuinely executes `hub/__init__.py`, so edges
+        // to `hub` and `hub.core` must survive the self-ancestor guard.
+        let index = make_index(&["hub", "hub.core", "hub.core.util", "hris.models.employee"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::Import,
+            module: None,
+            names: vec![name("hub.core.util")],
+            level: 0,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("hris.models.employee", &imports, &index, true, false);
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert!(targets.contains(&"hub.core.util"));
+        assert!(targets.contains(&"hub.core"));
+        assert!(targets.contains(&"hub"));
     }
 
     #[test]
