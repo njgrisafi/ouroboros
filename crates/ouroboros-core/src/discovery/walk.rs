@@ -34,17 +34,11 @@ fn collect_python_files(
         source: e,
     })?;
 
-    // Collect and sort entries for deterministic traversal order.
-    let mut sorted_entries: Vec<_> =
-        entries
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| DiscoveryError::Walk {
-                root: root.to_path_buf(),
-                source: e,
-            })?;
-    sorted_entries.sort_by_key(|e| e.file_name());
-
-    for entry in sorted_entries {
+    for entry in entries {
+        let entry = entry.map_err(|e| DiscoveryError::Walk {
+            root: root.to_path_buf(),
+            source: e,
+        })?;
         let path = entry.path();
         let file_type = entry.file_type().map_err(|e| DiscoveryError::Walk {
             root: root.to_path_buf(),

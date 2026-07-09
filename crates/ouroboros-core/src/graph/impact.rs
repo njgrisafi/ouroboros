@@ -102,6 +102,79 @@ pub fn reachable_cycles_from(
     node_to_scc: &HashMap<PathBuf, usize>,
     cycle_sccs: &HashSet<usize>,
 ) -> Vec<ReachableCycle> {
+    reachable_cycles_from_with_pruning(graph, start, node_to_scc, cycle_sccs, None)
+}
+
+pub fn nodes_reaching_cycles(
+    graph: &FileDependencyGraph,
+    node_to_scc: &HashMap<PathBuf, usize>,
+    cycle_sccs: &HashSet<usize>,
+) -> HashSet<PathBuf> {
+    let mut reverse_graph: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    for (from, neighbors) in graph {
+        reverse_graph.entry(from.clone()).or_default();
+        for neighbor in neighbors {
+            reverse_graph
+                .entry(neighbor.clone())
+                .or_default()
+                .push(from.clone());
+        }
+    }
+
+    let mut reachable = HashSet::new();
+    let mut queue = VecDeque::new();
+    let mut cycle_nodes: Vec<PathBuf> = node_to_scc
+        .iter()
+        .filter_map(|(node, scc_id)| cycle_sccs.contains(scc_id).then_some(node.clone()))
+        .collect();
+    cycle_nodes.sort();
+
+    for node in cycle_nodes {
+        if reachable.insert(node.clone()) {
+            queue.push_back(node);
+        }
+    }
+
+    while let Some(node) = queue.pop_front() {
+        if let Some(predecessors) = reverse_graph.get(&node) {
+            for predecessor in predecessors {
+                if reachable.insert(predecessor.clone()) {
+                    queue.push_back(predecessor.clone());
+                }
+            }
+        }
+    }
+
+    reachable
+}
+
+pub fn reachable_cycles_from_pruned(
+    graph: &FileDependencyGraph,
+    start: &PathBuf,
+    node_to_scc: &HashMap<PathBuf, usize>,
+    cycle_sccs: &HashSet<usize>,
+    nodes_reaching_cycles: &HashSet<PathBuf>,
+) -> Vec<ReachableCycle> {
+    if !nodes_reaching_cycles.contains(start) {
+        return Vec::new();
+    }
+
+    reachable_cycles_from_with_pruning(
+        graph,
+        start,
+        node_to_scc,
+        cycle_sccs,
+        Some(nodes_reaching_cycles),
+    )
+}
+
+fn reachable_cycles_from_with_pruning(
+    graph: &FileDependencyGraph,
+    start: &PathBuf,
+    node_to_scc: &HashMap<PathBuf, usize>,
+    cycle_sccs: &HashSet<usize>,
+    nodes_reaching_cycles: Option<&HashSet<PathBuf>>,
+) -> Vec<ReachableCycle> {
     let mut dist: HashMap<PathBuf, usize> = HashMap::new();
     let mut pred: HashMap<PathBuf, PathBuf> = HashMap::new();
     let mut queue = VecDeque::new();
@@ -114,6 +187,9 @@ pub fn reachable_cycles_from(
 
         if let Some(neighbors) = graph.get(&node) {
             for neighbor in neighbors {
+                if nodes_reaching_cycles.is_some_and(|reachable| !reachable.contains(neighbor)) {
+                    continue;
+                }
                 if !dist.contains_key(neighbor) {
                     dist.insert(neighbor.clone(), next_dist);
                     pred.insert(neighbor.clone(), node.clone());
@@ -124,19 +200,31 @@ pub fn reachable_cycles_from(
     }
 
     let mut best_by_scc: HashMap<usize, (PathBuf, Vec<PathBuf>, usize)> = HashMap::new();
-    let mut visited_nodes: Vec<PathBuf> = dist.keys().cloned().collect();
+    let mut visited_nodes: Vec<PathBuf> = dist
+        .keys()
+        .filter(|node| {
+            node_to_scc
+                .get(*node)
+                .is_some_and(|scc_id| cycle_sccs.contains(scc_id))
+        })
+        .cloned()
+        .collect();
     visited_nodes.sort();
 
     for node in visited_nodes {
         let Some(&scc_id) = node_to_scc.get(&node) else {
             continue;
         };
-        if !cycle_sccs.contains(&scc_id) {
+
+        let candidate_dist = dist[&node];
+        if best_by_scc
+            .get(&scc_id)
+            .is_some_and(|(_, _, best_dist)| candidate_dist > *best_dist)
+        {
             continue;
         }
 
         let path = reconstruct_path(start, &node, &pred);
-        let candidate_dist = dist[&node];
         let replace = best_by_scc
             .get(&scc_id)
             .map(|(_, best_path, best_dist)| {
@@ -373,6 +461,61 @@ mod tests {
         );
 
         assert!(cycles.is_empty());
+    }
+
+    #[test]
+    fn pruned_reachability_excludes_clean_branch_and_preserves_results() {
+        let graph = make_graph(&[
+            ("start.py", &["mid.py", "clean.py"]),
+            ("mid.py", &["cycle_a.py"]),
+            ("clean.py", &["leaf.py"]),
+            ("leaf.py", &[]),
+            ("cycle_a.py", &["cycle_b.py"]),
+            ("cycle_b.py", &["cycle_a.py"]),
+        ]);
+        let condensed = condensation(
+            &graph,
+            &[
+                paths(&["start.py"]),
+                paths(&["mid.py"]),
+                paths(&["clean.py"]),
+                paths(&["leaf.py"]),
+                paths(&["cycle_a.py", "cycle_b.py"]),
+            ],
+        );
+        let cycle_sccs = cycle_ids(&[4]);
+        let reachable_nodes = nodes_reaching_cycles(&graph, &condensed.node_to_scc, &cycle_sccs);
+
+        assert!(reachable_nodes.contains(&path("start.py")));
+        assert!(reachable_nodes.contains(&path("mid.py")));
+        assert!(!reachable_nodes.contains(&path("clean.py")));
+        assert!(!reachable_nodes.contains(&path("leaf.py")));
+
+        let unpruned = reachable_cycles_from(
+            &graph,
+            &path("start.py"),
+            &condensed.node_to_scc,
+            &cycle_sccs,
+        );
+        let pruned = reachable_cycles_from_pruned(
+            &graph,
+            &path("start.py"),
+            &condensed.node_to_scc,
+            &cycle_sccs,
+            &reachable_nodes,
+        );
+
+        assert_eq!(pruned, unpruned);
+        assert!(
+            reachable_cycles_from_pruned(
+                &graph,
+                &path("clean.py"),
+                &condensed.node_to_scc,
+                &cycle_sccs,
+                &reachable_nodes,
+            )
+            .is_empty()
+        );
     }
 
     #[test]

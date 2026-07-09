@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use ouroboros_core::graph::{
     EdgeMetadata, FileDependencyGraph, PathKind, PathMatch, condensation, match_path,
-    reachable_cycles_from, strongly_connected_components,
+    nodes_reaching_cycles, reachable_cycles_from_pruned, strongly_connected_components,
 };
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -246,6 +246,7 @@ pub fn build_traces(
                 .map(|&scc_id| (scc_id, i + 1))
         })
         .collect();
+    let cycle_reachable_nodes = nodes_reaching_cycles(graph, &cond.node_to_scc, &cycle_sccs);
 
     let mut traced_results = Vec::new();
     let mut unknown_paths = Vec::new();
@@ -292,7 +293,13 @@ pub fn build_traces(
             .nodes
             .iter()
             .map(|node| {
-                let reachable = reachable_cycles_from(graph, node, &cond.node_to_scc, &cycle_sccs);
+                let reachable = reachable_cycles_from_pruned(
+                    graph,
+                    node,
+                    &cond.node_to_scc,
+                    &cycle_sccs,
+                    &cycle_reachable_nodes,
+                );
                 let impacts = reachable
                     .iter()
                     .filter_map(|rc| {

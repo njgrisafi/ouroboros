@@ -2,9 +2,28 @@ use rustpython_parser::ast::{ExceptHandler, Stmt, Suite};
 
 use super::{ImportKind, ImportedName, RawImport};
 
-/// Convert a byte offset in source to a 1-indexed line number.
-fn byte_offset_to_line(source: &[u8], offset: usize) -> u32 {
-    source[..offset].iter().filter(|&&b| b == b'\n').count() as u32 + 1
+/// Maps byte offsets in source to 1-indexed line numbers.
+struct LineMap {
+    newline_offsets: Vec<usize>,
+}
+
+impl LineMap {
+    fn new(source: &str) -> Self {
+        let newline_offsets = source
+            .as_bytes()
+            .iter()
+            .enumerate()
+            .filter_map(|(offset, &byte)| (byte == b'\n').then_some(offset))
+            .collect();
+
+        Self { newline_offsets }
+    }
+
+    fn line_for_offset(&self, offset: usize) -> u32 {
+        self.newline_offsets
+            .partition_point(|&newline| newline < offset) as u32
+            + 1
+    }
 }
 
 /// Walk a parsed module body and extract import statements.
@@ -18,13 +37,14 @@ fn byte_offset_to_line(source: &[u8], offset: usize) -> u32 {
 /// that function-scoped ("local") imports are also collected.
 pub(crate) fn collect_imports(body: &Suite, source: &str, include_local: bool) -> Vec<RawImport> {
     let mut imports = Vec::new();
-    collect_imports_recursive(body, source, include_local, &mut imports);
+    let line_map = LineMap::new(source);
+    collect_imports_recursive(body, &line_map, include_local, &mut imports);
     imports
 }
 
 fn collect_imports_recursive(
     body: &[Stmt],
-    source: &str,
+    line_map: &LineMap,
     include_local: bool,
     imports: &mut Vec<RawImport>,
 ) {
@@ -32,7 +52,7 @@ fn collect_imports_recursive(
         match stmt {
             Stmt::Import(import_stmt) => {
                 let offset = u32::from(import_stmt.range.start()) as usize;
-                let line = byte_offset_to_line(source.as_bytes(), offset);
+                let line = line_map.line_for_offset(offset);
 
                 let names = import_stmt
                     .names
@@ -53,7 +73,7 @@ fn collect_imports_recursive(
             }
             Stmt::ImportFrom(import_from) => {
                 let offset = u32::from(import_from.range.start()) as usize;
-                let line = byte_offset_to_line(source.as_bytes(), offset);
+                let line = line_map.line_for_offset(offset);
 
                 let module = import_from.module.as_ref().map(|id| id.to_string());
 
@@ -78,7 +98,7 @@ fn collect_imports_recursive(
             }
             _ if include_local => {
                 for nested_body in nested_bodies(stmt) {
-                    collect_imports_recursive(nested_body, source, true, imports);
+                    collect_imports_recursive(nested_body, line_map, true, imports);
                 }
             }
             _ => {}
@@ -408,5 +428,15 @@ except ImportError:
         let imports = parse_and_collect(source);
         assert_eq!(imports[0].line, 1);
         assert_eq!(imports[1].line, 3);
+    }
+
+    #[test]
+    fn line_map_counts_only_newlines_before_offset() {
+        let source = "x\nimport os\n";
+        let line_map = LineMap::new(source);
+
+        assert_eq!(line_map.line_for_offset(0), 1);
+        assert_eq!(line_map.line_for_offset(1), 1);
+        assert_eq!(line_map.line_for_offset(source.find("import").unwrap()), 2);
     }
 }
