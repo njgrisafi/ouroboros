@@ -134,32 +134,59 @@ fn resolve_source_roots(explicit: Option<&Path>) -> Vec<PathBuf> {
         .collect()
 }
 
-fn read_source_line(source_roots: &[PathBuf], file_path: &str, line_number: u32) -> Option<String> {
-    let line_idx = (line_number as usize).checked_sub(1)?;
-    for root in source_roots {
-        let full_path = root.join(file_path);
-        if let Ok(contents) = std::fs::read_to_string(&full_path) {
-            let all_lines: Vec<&str> = contents.lines().collect();
-            if let Some(&first_line) = all_lines.get(line_idx) {
-                let trimmed = first_line.trim();
-                // If the line has an opening paren but no closing paren,
-                // it's a multi-line import — collect continuation lines.
-                if trimmed.contains('(') && !trimmed.contains(')') {
-                    let mut parts = vec![trimmed.to_string()];
-                    for &next_line in &all_lines[line_idx + 1..] {
-                        let next_trimmed = next_line.trim();
-                        parts.push(next_trimmed.to_string());
-                        if next_trimmed.contains(')') {
-                            break;
-                        }
-                    }
-                    return Some(parts.join(" "));
-                }
-                return Some(trimmed.to_string());
-            }
+struct SourceLineCache<'a> {
+    source_roots: &'a [PathBuf],
+    lines_by_path: HashMap<PathBuf, Option<Vec<String>>>,
+}
+
+impl<'a> SourceLineCache<'a> {
+    fn new(source_roots: &'a [PathBuf]) -> Self {
+        Self {
+            source_roots,
+            lines_by_path: HashMap::new(),
         }
     }
-    None
+
+    fn read_source_line(&mut self, file_path: &str, line_number: u32) -> Option<String> {
+        let line_idx = (line_number as usize).checked_sub(1)?;
+        for i in 0..self.source_roots.len() {
+            let full_path = self.source_roots[i].join(file_path);
+            if let Some(line) = self.read_full_path_line(full_path, line_idx) {
+                return Some(line);
+            }
+        }
+        None
+    }
+
+    fn read_full_path_line(&mut self, full_path: PathBuf, line_idx: usize) -> Option<String> {
+        let all_lines = self
+            .lines_by_path
+            .entry(full_path)
+            .or_insert_with_key(|path| {
+                std::fs::read_to_string(path)
+                    .ok()
+                    .map(|contents| contents.lines().map(str::to_string).collect())
+            });
+
+        let all_lines = all_lines.as_ref()?;
+        let first_line = all_lines.get(line_idx)?;
+        let trimmed = first_line.trim();
+        // If the line has an opening paren but no closing paren,
+        // it's a multi-line import — collect continuation lines.
+        if trimmed.contains('(') && !trimmed.contains(')') {
+            let mut parts = vec![trimmed.to_string()];
+            for next_line in &all_lines[line_idx + 1..] {
+                let next_trimmed = next_line.trim();
+                parts.push(next_trimmed.to_string());
+                if next_trimmed.contains(')') {
+                    break;
+                }
+            }
+            return Some(parts.join(" "));
+        }
+
+        Some(trimmed.to_string())
+    }
 }
 
 pub fn generate_html(
@@ -449,6 +476,8 @@ fn write_size_table(html: &mut String, size_distribution: &[(usize, usize)]) {
 }
 
 fn write_cycle_table(html: &mut String, cycles: &[JsonCycle], source_roots: &[PathBuf]) {
+    let mut source_lines = SourceLineCache::new(source_roots);
+
     html.push_str("    <span id=\"all-cycles\" class=\"section-anchor\"></span>\n");
     html.push_str("\n    <h2>All Cycles</h2>\n");
     html.push_str(
@@ -517,7 +546,7 @@ fn write_cycle_table(html: &mut String, cycles: &[JsonCycle], source_roots: &[Pa
                         let source_text = if source_roots.is_empty() {
                             None
                         } else {
-                            read_source_line(source_roots, &file.path, line_num)
+                            source_lines.read_source_line(&file.path, line_num)
                         };
                         if let Some(code) = source_text {
                             let _ = writeln!(
@@ -1707,6 +1736,48 @@ mod tests {
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, std::slice::from_ref(&dir), "");
+        assert!(html.contains("from auth.b import handler"));
+        assert!(html.contains("diff-code"));
+    }
+
+    #[test]
+    fn html_diff_tries_later_source_root_when_first_has_no_line() {
+        use std::fs;
+
+        let base = std::env::temp_dir().join(format!(
+            "oboros_test_source_fallback_{}",
+            std::process::id()
+        ));
+        let first_root = base.join("first");
+        let second_root = base.join("second");
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(first_root.join("auth")).unwrap();
+        fs::create_dir_all(second_root.join("auth")).unwrap();
+        fs::write(first_root.join("auth/a.py"), "# too short\n").unwrap();
+        fs::write(
+            second_root.join("auth/a.py"),
+            "# line 1\n# line 2\nfrom auth.b import handler\n",
+        )
+        .unwrap();
+
+        let mut cycle = make_cycle(1, &["auth"], &["auth/a.py", "auth/b.py"]);
+        cycle.files[0].edges = vec![crate::output::JsonEdge {
+            to: "auth/b.py".to_string(),
+            lines: vec![3],
+        }];
+        let report = JsonReport {
+            version: 1,
+            summary: JsonSummary {
+                cycles_reported: 1,
+                cycles_suppressed: 0,
+            },
+            cycles: vec![cycle],
+            traced: vec![],
+            unknown_paths: vec![],
+        };
+        let stats = ReportStats::from_report(&report);
+        let html = generate_html(&report, &stats, &[first_root, second_root], "");
+
         assert!(html.contains("from auth.b import handler"));
         assert!(html.contains("diff-code"));
     }
