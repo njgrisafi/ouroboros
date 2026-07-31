@@ -90,6 +90,22 @@ pub struct JsonIgnoreEntry {
     pub files: Vec<String>,
 }
 
+#[derive(Debug, Serialize, PartialEq)]
+pub struct JsonCyclicFilesReport {
+    pub version: u32,
+    pub cyclic_files: Vec<String>,
+}
+
+pub fn build_dump_cyclic_files_report(cyclic_files: &[std::path::PathBuf]) -> JsonCyclicFilesReport {
+    JsonCyclicFilesReport {
+        version: 1,
+        cyclic_files: cyclic_files
+            .iter()
+            .map(|p| p.display().to_string().replace('\\', "/"))
+            .collect(),
+    }
+}
+
 /// Collect sorted, deduplicated import lines for a file within a cycle.
 ///
 /// This is the shared logic used by both human and JSON reporters.
