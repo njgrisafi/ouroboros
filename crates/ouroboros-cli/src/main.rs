@@ -511,6 +511,9 @@ fn main() {
                     "# paste under [cycles] in oboros.toml (merge into an existing [cycles] table if you have one)"
                 );
                 println!("[cycles]");
+                if config.cycles.ignore_derived_ancestor_init {
+                    println!("ignore-derived-ancestor-init = true");
+                }
                 if paths.is_empty() {
                     println!("known-cyclic-files = []");
                 } else {
@@ -522,7 +525,10 @@ fn main() {
                 }
             }
             OutputFormat::Json => {
-                let report = output::build_dump_cyclic_files_report(&cyclic_files);
+                let report = output::build_dump_cyclic_files_report(
+                    &cyclic_files,
+                    config.cycles.ignore_derived_ancestor_init,
+                );
                 println!("{}", serde_json::to_string_pretty(&report).unwrap());
             }
         }

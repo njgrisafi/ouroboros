@@ -95,14 +95,17 @@ pub struct JsonIgnoreEntry {
 #[derive(Debug, Serialize, PartialEq)]
 pub struct JsonCyclicFilesReport {
     pub version: u32,
+    pub ignore_derived_ancestor_init: bool,
     pub cyclic_files: Vec<String>,
 }
 
 pub fn build_dump_cyclic_files_report(
     cyclic_files: &[std::path::PathBuf],
+    ignore_derived_ancestor_init: bool,
 ) -> JsonCyclicFilesReport {
     JsonCyclicFilesReport {
         version: 1,
+        ignore_derived_ancestor_init,
         cyclic_files: cyclic_files
             .iter()
             .map(|p| p.display().to_string().replace('\\', "/"))

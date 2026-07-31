@@ -235,3 +235,75 @@ fn check_fails_on_stale_list_after_enabling_flag() {
         "stderr should show beta/helpers.py as removed"
     );
 }
+
+#[test]
+fn dump_json_includes_ignore_flag_true() {
+    let cfg = fixture_config("cyclic_ancestor_only");
+    let parsed = run_json(&[
+        "--config",
+        cfg.to_str().unwrap(),
+        "--format",
+        "json",
+        "--dump-cyclic-files",
+        "--ignore-derived-ancestor-init",
+    ]);
+    assert_eq!(parsed["ignore_derived_ancestor_init"], true);
+}
+
+#[test]
+fn dump_json_includes_ignore_flag_false_by_default() {
+    let cfg = fixture_config("cyclic_ancestor_only");
+    let parsed = run_json(&[
+        "--config",
+        cfg.to_str().unwrap(),
+        "--format",
+        "json",
+        "--dump-cyclic-files",
+    ]);
+    assert_eq!(parsed["ignore_derived_ancestor_init"], false);
+}
+
+#[test]
+fn dump_human_includes_ignore_flag_when_on() {
+    // cyclic_direct_init has a genuine direct cycle, so the baseline is non-empty even with the flag.
+    let cfg = fixture_config("cyclic_direct_init");
+    let output = run_raw(&[
+        "--config",
+        cfg.to_str().unwrap(),
+        "--dump-cyclic-files",
+        "--ignore-derived-ancestor-init",
+    ]);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("ignore-derived-ancestor-init = true"),
+        "human fragment should carry the flag; got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("known-cyclic-files = ["),
+        "should still list the direct cycle"
+    );
+    assert_eq!(output.status.code().unwrap(), 0);
+}
+
+#[test]
+fn dump_human_omits_ignore_flag_by_default() {
+    let cfg = fixture_config("cyclic_ancestor_only");
+    let output = run_raw(&["--config", cfg.to_str().unwrap(), "--dump-cyclic-files"]);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !stdout.contains("ignore-derived-ancestor-init"),
+        "flag line should be omitted at default; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn dump_human_includes_ignore_flag_via_config() {
+    // Config opt-in (no CLI flag) should also surface the flag in the human fragment.
+    let cfg = fixture_config("cyclic_ancestor_only_optin");
+    let output = run_raw(&["--config", cfg.to_str().unwrap(), "--dump-cyclic-files"]);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("ignore-derived-ancestor-init = true"),
+        "config opt-in should surface the flag; got:\n{stdout}"
+    );
+}
