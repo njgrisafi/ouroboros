@@ -16,6 +16,8 @@ pub struct JsonReport {
     pub traced: Vec<JsonTrace>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unknown_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -161,6 +163,7 @@ pub fn build_json_report(
     edge_metadata: &EdgeMetadata,
     traced: Vec<JsonTrace>,
     unknown_paths: Vec<String>,
+    excluded: Vec<String>,
 ) -> JsonReport {
     let cycle_data = order_cycles(kept_cycles);
 
@@ -214,6 +217,7 @@ pub fn build_json_report(
         cycles,
         traced,
         unknown_paths,
+        excluded,
     }
 }
 
@@ -258,25 +262,7 @@ pub fn build_traces(
         }
         seen_raw.push(raw.clone());
 
-        let normalized = normalize_trace_path(raw);
-        let had_trailing_slash = raw.trim_end().ends_with('/');
-        let path_to_match = PathBuf::from(&normalized);
-        let matched = match_trace_candidate(&node_paths, &path_to_match, had_trailing_slash)
-            .map(|matched| (matched, normalized.clone()))
-            .or_else(|| {
-                for root in source_roots {
-                    let root_prefix = root.trim_end_matches('/').to_string() + "/";
-                    if let Some(stripped) = normalized.strip_prefix(&root_prefix) {
-                        let stripped_path = PathBuf::from(stripped);
-                        if let Some(matched) =
-                            match_trace_candidate(&node_paths, &stripped_path, had_trailing_slash)
-                        {
-                            return Some((matched, stripped.to_string()));
-                        }
-                    }
-                }
-                None
-            });
+        let matched = resolve_path_to_nodes(&node_paths, raw, source_roots);
 
         let Some((matched, resolved)) = matched else {
             eprintln!("warning: trace path '{raw}' matched no first-party files");
@@ -367,7 +353,38 @@ pub fn build_traces(
     (traced_results, unknown_paths)
 }
 
-fn normalize_trace_path(raw: &str) -> String {
+/// Resolve a raw path string to matched graph nodes, with source-root prefix stripping.
+///
+/// Returns `Some((PathMatch, resolved_display_string))` if the path matches any node,
+/// or `None` if no match. Mirrors the path-matching logic used by `--trace`.
+pub(crate) fn resolve_path_to_nodes(
+    node_paths: &BTreeSet<PathBuf>,
+    raw: &str,
+    source_roots: &[String],
+) -> Option<(PathMatch, String)> {
+    let normalized = normalize_trace_path(raw);
+    let had_trailing_slash = raw.trim_end().ends_with('/');
+    let path_to_match = PathBuf::from(&normalized);
+
+    match_trace_candidate(node_paths, &path_to_match, had_trailing_slash)
+        .map(|matched| (matched, normalized.clone()))
+        .or_else(|| {
+            for root in source_roots {
+                let root_prefix = root.trim_end_matches('/').to_string() + "/";
+                if let Some(stripped) = normalized.strip_prefix(&root_prefix) {
+                    let stripped_path = PathBuf::from(stripped);
+                    if let Some(matched) =
+                        match_trace_candidate(node_paths, &stripped_path, had_trailing_slash)
+                    {
+                        return Some((matched, stripped.to_string()));
+                    }
+                }
+            }
+            None
+        })
+}
+
+pub(crate) fn normalize_trace_path(raw: &str) -> String {
     let trimmed = raw.trim();
     let stripped = trimmed.strip_prefix("./").unwrap_or(trimmed);
     stripped.trim_end_matches('/').replace('\\', "/")
@@ -433,7 +450,7 @@ mod tests {
     #[test]
     fn empty_report_serializes_correctly() {
         let edge_metadata = make_edge_metadata(&[]);
-        let report = build_json_report(&[], 0, &edge_metadata, vec![], vec![]);
+        let report = build_json_report(&[], 0, &edge_metadata, vec![], vec![], vec![]);
 
         assert_eq!(report.version, 1);
         assert_eq!(report.summary.cycles_reported, 0);
@@ -450,7 +467,7 @@ mod tests {
         let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
         let edge_metadata =
             make_edge_metadata(&[("a.py", "b.py", vec![10]), ("b.py", "a.py", vec![5])]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
 
         assert_eq!(report.cycles.len(), 1);
         assert_eq!(report.cycles[0].index, 1);
@@ -469,7 +486,7 @@ mod tests {
             vec![PathBuf::from("x.py"), PathBuf::from("y.py")],
         ];
         let edge_metadata = make_edge_metadata(&[]);
-        let report = build_json_report(&kept, 1, &edge_metadata, vec![], vec![]);
+        let report = build_json_report(&kept, 1, &edge_metadata, vec![], vec![], vec![]);
 
         assert_eq!(report.summary.cycles_reported, 2);
         assert_eq!(report.summary.cycles_suppressed, 1);
@@ -482,7 +499,7 @@ mod tests {
     fn import_lines_sorted_and_deduped() {
         let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
         let edge_metadata = make_edge_metadata(&[("a.py", "b.py", vec![30, 10, 10, 20])]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
 
         assert_eq!(report.cycles[0].files[0].import_lines, vec![10, 20, 30]);
     }
@@ -520,7 +537,7 @@ mod tests {
         ]];
         let edge_metadata =
             make_edge_metadata(&[("a.py", "b.py", vec![1]), ("b.py", "c.py", vec![2])]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
 
         assert_eq!(report.cycles[0].files[2].path, "c.py");
         assert!(report.cycles[0].files[2].import_lines.is_empty());
@@ -530,7 +547,7 @@ mod tests {
     fn json_round_trip_is_valid() {
         let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
         let edge_metadata = make_edge_metadata(&[("a.py", "b.py", vec![7])]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
 
         let json = serde_json::to_string_pretty(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -615,7 +632,7 @@ mod tests {
             vec![PathBuf::from("a.py"), PathBuf::from("b.py")],
         ];
         let edge_metadata = make_edge_metadata(&[]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
 
         assert_eq!(report.cycles[0].packages, vec!["pkg".to_string()]);
         assert_eq!(
@@ -638,7 +655,7 @@ mod tests {
             vec![PathBuf::from("beta/x.py"), PathBuf::from("beta/y.py")],
         ];
         let edge_metadata = make_edge_metadata(&[]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
 
         assert_eq!(report.cycles[0].packages, vec!["alpha".to_string()]);
         assert_eq!(report.cycles[0].size, 2);
@@ -661,7 +678,7 @@ mod tests {
             vec![PathBuf::from("pkg/a.py"), PathBuf::from("pkg/b.py")],
         ];
         let edge_metadata = make_edge_metadata(&[]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
 
         assert_eq!(report.cycles[0].packages, vec!["pkg".to_string()]);
         assert_eq!(report.cycles[1].packages, Vec::<String>::new());
@@ -671,7 +688,7 @@ mod tests {
     fn json_report_no_package_scoped_field() {
         let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
         let edge_metadata = make_edge_metadata(&[]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
 
         let json = serde_json::to_string_pretty(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -756,10 +773,40 @@ mod tests {
         assert!(traced.is_empty());
         assert!(unknown.is_empty());
 
-        let report = build_json_report(&kept, 0, &edge_metadata, traced, unknown);
+        let report = build_json_report(&kept, 0, &edge_metadata, traced, unknown, vec![]);
         let json = serde_json::to_string_pretty(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(parsed.get("traced").is_none());
         assert!(parsed.get("unknown_paths").is_none());
+    }
+
+    #[test]
+    fn excluded_field_omitted_when_empty() {
+        let edge_metadata = make_edge_metadata(&[]);
+        let report = build_json_report(&[], 0, &edge_metadata, vec![], vec![], vec![]);
+        let json = serde_json::to_string_pretty(&report).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            parsed.get("excluded").is_none(),
+            "excluded key should be absent when empty"
+        );
+    }
+
+    #[test]
+    fn excluded_field_present_when_non_empty() {
+        let edge_metadata = make_edge_metadata(&[]);
+        let report = build_json_report(
+            &[],
+            0,
+            &edge_metadata,
+            vec![],
+            vec![],
+            vec!["tests/".to_string()],
+        );
+        let json = serde_json::to_string_pretty(&report).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let excluded = parsed["excluded"].as_array().unwrap();
+        assert_eq!(excluded.len(), 1);
+        assert_eq!(excluded[0], "tests/");
     }
 }

@@ -72,6 +72,12 @@ struct Cli {
     )]
     traces: Vec<String>,
 
+    /// Exclude paths (files or directories) from analysis seeds. Excluded files
+    /// reachable via imports from non-excluded files are still reported.
+    /// Repeatable and/or comma-separated. Unioned with `exclude` in config.
+    #[arg(long = "exclude", value_name = "PATH", value_delimiter = ',')]
+    excludes: Vec<String>,
+
     /// Do not record import edges to ancestor package __init__.py files
     /// (importing `a.b.c` normally also depends on `a` and `a.b`).
     #[arg(long = "no-include-ancestor-init")]
@@ -204,6 +210,15 @@ fn main() {
         config.resolve.include_ancestor_init = false;
     }
 
+    let mut seen_excludes = std::collections::HashSet::new();
+    let merged_excludes: Vec<String> = config
+        .exclude
+        .iter()
+        .chain(cli.excludes.iter())
+        .filter(|e| seen_excludes.insert((*e).clone()))
+        .cloned()
+        .collect();
+
     if verbose {
         println!("{config:#?}");
     }
@@ -319,8 +334,36 @@ fn main() {
         }
     }
 
+    let node_paths: std::collections::BTreeSet<std::path::PathBuf> =
+        graph_result.graph.keys().cloned().collect();
+    let mut excluded: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
+    let mut applied_exclude_patterns: Vec<String> = Vec::new();
+    for raw in &merged_excludes {
+        match output::resolve_path_to_nodes(&node_paths, raw, &config.source_roots) {
+            Some((matched, resolved)) => {
+                let display = match matched.kind {
+                    ouroboros_core::graph::PathKind::File => resolved.clone(),
+                    ouroboros_core::graph::PathKind::Directory => format!("{resolved}/"),
+                };
+                applied_exclude_patterns.push(display);
+                for node in matched.nodes {
+                    excluded.insert(node);
+                }
+            }
+            None => {
+                eprintln!("warning: exclude path '{raw}' matched no first-party files");
+            }
+        }
+    }
+    let effective_graph = if excluded.is_empty() {
+        graph_result.graph.clone()
+    } else {
+        graph::apply_exclusions(&graph_result.graph, &excluded)
+    };
+
     spinner.set_message("Detecting cycles...");
-    let all_cycles = graph::dependency_cycles(&graph_result.graph);
+    let all_cycles = graph::dependency_cycles(&effective_graph);
     let size_filtered = cycles::filter_cycles_by_size(all_cycles, &config.cycles);
     let filter_result = cycles::filter_ignored_cycles(size_filtered, &config.cycles.ignore);
 
@@ -446,7 +489,7 @@ fn main() {
                 Some(output::build_traces(
                     &cli.traces,
                     &cycles,
-                    &graph_result.graph,
+                    &effective_graph,
                     &graph_result.edge_metadata,
                     &config.source_roots,
                 ))
@@ -518,7 +561,7 @@ fn main() {
                 output::build_traces(
                     &cli.traces,
                     &cycles,
-                    &graph_result.graph,
+                    &effective_graph,
                     &graph_result.edge_metadata,
                     &config.source_roots,
                 )
@@ -530,6 +573,7 @@ fn main() {
                 &graph_result.edge_metadata,
                 traced,
                 unknown_paths,
+                applied_exclude_patterns,
             );
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
 

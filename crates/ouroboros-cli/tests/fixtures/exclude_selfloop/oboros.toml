@@ -1,0 +1,4 @@
+source-roots = ["src"]
+
+[cycles]
+min-scc-size = 1

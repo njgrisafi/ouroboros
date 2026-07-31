@@ -148,6 +148,69 @@ pub fn nodes_reaching_cycles(
     reachable
 }
 
+/// Forward BFS from a set of starting nodes.
+///
+/// Returns every node reachable from any start by following forward import edges
+/// (inclusive of the starts themselves). Terminates on cycles (visited set guards
+/// re-enqueue). O(V + E).
+pub fn reachable_from(graph: &FileDependencyGraph, starts: &HashSet<PathBuf>) -> HashSet<PathBuf> {
+    let mut visited: HashSet<PathBuf> = HashSet::new();
+    let mut queue: VecDeque<PathBuf> = VecDeque::new();
+
+    for start in starts {
+        if visited.insert(start.clone()) {
+            queue.push_back(start.clone());
+        }
+    }
+
+    while let Some(node) = queue.pop_front() {
+        if let Some(neighbors) = graph.get(&node) {
+            for neighbor in neighbors {
+                if visited.insert(neighbor.clone()) {
+                    queue.push_back(neighbor.clone());
+                }
+            }
+        }
+    }
+
+    visited
+}
+
+/// Prune the graph to the forward-reachable induced subgraph from non-excluded seeds.
+///
+/// Seeds are all graph nodes NOT in `excluded`. The retained set R is every node
+/// reachable from any seed by following forward import edges (inclusive of seeds).
+/// Returns the induced subgraph on R: only nodes in R, with edges filtered to R×R.
+///
+/// If `excluded` is empty, returns a graph equal to the input (all nodes are seeds).
+/// Excluded nodes that are reachable from a seed (e.g. because a non-excluded file
+/// imports them) are retained — this is the mypy-faithful semantics.
+pub fn apply_exclusions(
+    graph: &FileDependencyGraph,
+    excluded: &HashSet<PathBuf>,
+) -> FileDependencyGraph {
+    let seeds: HashSet<PathBuf> = graph
+        .keys()
+        .filter(|n| !excluded.contains(*n))
+        .cloned()
+        .collect();
+
+    let retained = reachable_from(graph, &seeds);
+
+    graph
+        .iter()
+        .filter(|(node, _)| retained.contains(*node))
+        .map(|(node, deps)| {
+            let filtered_deps: BTreeSet<PathBuf> = deps
+                .iter()
+                .filter(|d| retained.contains(*d))
+                .cloned()
+                .collect();
+            (node.clone(), filtered_deps)
+        })
+        .collect()
+}
+
 pub fn reachable_cycles_from_pruned(
     graph: &FileDependencyGraph,
     start: &PathBuf,
@@ -632,5 +695,132 @@ mod tests {
         assert_eq!(cycles[0].path.len(), 101);
         assert_eq!(cycles[0].path.first(), Some(&path("n000.py")));
         assert_eq!(cycles[0].path.last(), Some(&path("n100.py")));
+    }
+
+    #[test]
+    fn reachable_from_linear_chain() {
+        let graph = make_graph(&[("a.py", &["b.py"]), ("b.py", &["c.py"]), ("c.py", &[])]);
+        let starts: HashSet<PathBuf> = [path("a.py")].into_iter().collect();
+        let result = reachable_from(&graph, &starts);
+        assert!(result.contains(&path("a.py")));
+        assert!(result.contains(&path("b.py")));
+        assert!(result.contains(&path("c.py")));
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn reachable_from_self_loop_terminates() {
+        let graph = make_graph(&[("a.py", &["a.py"])]);
+        let starts: HashSet<PathBuf> = [path("a.py")].into_iter().collect();
+        let result = reachable_from(&graph, &starts);
+        assert_eq!(result, [path("a.py")].into_iter().collect());
+    }
+
+    #[test]
+    fn reachable_from_disconnected_node_excluded() {
+        let graph = make_graph(&[("a.py", &["b.py"]), ("b.py", &[]), ("x.py", &[])]);
+        let starts: HashSet<PathBuf> = [path("a.py")].into_iter().collect();
+        let result = reachable_from(&graph, &starts);
+        assert!(result.contains(&path("a.py")));
+        assert!(result.contains(&path("b.py")));
+        assert!(!result.contains(&path("x.py")));
+    }
+
+    #[test]
+    fn reachable_from_direction_forward_only() {
+        let graph = make_graph(&[("a.py", &["b.py"]), ("b.py", &[]), ("d.py", &["a.py"])]);
+        let starts: HashSet<PathBuf> = [path("a.py")].into_iter().collect();
+        let result = reachable_from(&graph, &starts);
+        assert!(result.contains(&path("a.py")));
+        assert!(result.contains(&path("b.py")));
+        assert!(
+            !result.contains(&path("d.py")),
+            "d imports a but a does not import d; d must not be reachable"
+        );
+    }
+
+    #[test]
+    fn reachable_from_multiple_starts_union() {
+        let graph = make_graph(&[
+            ("a.py", &["b.py"]),
+            ("b.py", &[]),
+            ("c.py", &["d.py"]),
+            ("d.py", &[]),
+        ]);
+        let starts: HashSet<PathBuf> = [path("a.py"), path("c.py")].into_iter().collect();
+        let result = reachable_from(&graph, &starts);
+        assert_eq!(result.len(), 4);
+    }
+
+    #[test]
+    fn reachable_from_empty_starts() {
+        let graph = make_graph(&[("a.py", &["b.py"]), ("b.py", &[])]);
+        let starts: HashSet<PathBuf> = HashSet::new();
+        let result = reachable_from(&graph, &starts);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn apply_exclusions_mutual_cycle_one_excluded_both_retained() {
+        let graph = make_graph(&[("a.py", &["b.py"]), ("b.py", &["a.py"])]);
+        let excluded: HashSet<PathBuf> = [path("b.py")].into_iter().collect();
+        let result = apply_exclusions(&graph, &excluded);
+        assert!(result.contains_key(&path("a.py")));
+        assert!(result.contains_key(&path("b.py")));
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn apply_exclusions_fully_excluded_cycle_pruned() {
+        let graph = make_graph(&[("x.py", &["y.py"]), ("y.py", &["x.py"])]);
+        let excluded: HashSet<PathBuf> = [path("x.py"), path("y.py")].into_iter().collect();
+        let result = apply_exclusions(&graph, &excluded);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn apply_exclusions_importer_only_excluded_dropped() {
+        let graph = make_graph(&[("t.py", &["a.py"]), ("a.py", &[])]);
+        let excluded: HashSet<PathBuf> = [path("t.py")].into_iter().collect();
+        let result = apply_exclusions(&graph, &excluded);
+        assert!(result.contains_key(&path("a.py")));
+        assert!(!result.contains_key(&path("t.py")));
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn apply_exclusions_chain_excluded_unreachable_dropped() {
+        let graph = make_graph(&[
+            ("ex1.py", &["ex2.py"]),
+            ("ex2.py", &["app.py"]),
+            ("app.py", &[]),
+        ]);
+        let excluded: HashSet<PathBuf> = [path("ex1.py"), path("ex2.py")].into_iter().collect();
+        let result = apply_exclusions(&graph, &excluded);
+        assert!(result.contains_key(&path("app.py")));
+        assert!(!result.contains_key(&path("ex1.py")));
+        assert!(!result.contains_key(&path("ex2.py")));
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn apply_exclusions_empty_excluded_returns_identical_graph() {
+        let graph = make_graph(&[("a.py", &["b.py"]), ("b.py", &["c.py"]), ("c.py", &[])]);
+        let excluded: HashSet<PathBuf> = HashSet::new();
+        let result = apply_exclusions(&graph, &excluded);
+        assert_eq!(result.len(), graph.len());
+        for (node, deps) in &graph {
+            assert_eq!(result.get(node), Some(deps));
+        }
+    }
+
+    #[test]
+    fn apply_exclusions_self_loop_reachable_retained() {
+        let graph = make_graph(&[("a.py", &["s.py"]), ("s.py", &["s.py"])]);
+        let excluded: HashSet<PathBuf> = [path("s.py")].into_iter().collect();
+        let result = apply_exclusions(&graph, &excluded);
+        assert!(result.contains_key(&path("a.py")));
+        assert!(result.contains_key(&path("s.py")));
+        assert!(result[&path("s.py")].contains(&path("s.py")));
     }
 }
