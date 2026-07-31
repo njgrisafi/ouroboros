@@ -1,0 +1,4 @@
+source-roots = ["src"]
+
+[cycles]
+ignore-derived-ancestor-init = true
