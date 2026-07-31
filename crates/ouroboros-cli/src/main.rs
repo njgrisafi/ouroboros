@@ -412,6 +412,47 @@ fn main() {
     spinner.finish_and_clear();
 
     if cli.check_cyclic_files {
+        use std::collections::BTreeSet;
+
+        let known: BTreeSet<String> = config
+            .cycles
+            .known_cyclic_files
+            .iter()
+            .map(|s| s.trim().replace('\\', "/"))
+            .collect();
+
+        let computed: BTreeSet<String> = cyclic_files
+            .iter()
+            .map(|p| p.display().to_string().replace('\\', "/"))
+            .collect();
+
+        if known == computed {
+            eprintln!("cyclic files unchanged ({} files)", computed.len());
+            return;
+        }
+
+        let added: Vec<&String> = computed
+            .difference(&known)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let removed: Vec<&String> = known
+            .difference(&computed)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        eprintln!("cyclic files changed:");
+        for path in &added {
+            eprintln!("  + {path}");
+        }
+        for path in &removed {
+            eprintln!("  - {path}");
+        }
+        eprintln!(
+            "run `oboros --dump-cyclic-files` to update [cycles] known-cyclic-files in oboros.toml"
+        );
+        std::process::exit(1);
     } else if cli.dump_cyclic_files {
         match cli.format {
             OutputFormat::Human => {
@@ -619,6 +660,14 @@ fn main() {
                 traced,
                 unknown_paths,
                 applied_exclude_patterns,
+                if cli.show_cyclic_files {
+                    cyclic_files
+                        .iter()
+                        .map(|p| p.display().to_string().replace('\\', "/"))
+                        .collect()
+                } else {
+                    vec![]
+                },
             );
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
 

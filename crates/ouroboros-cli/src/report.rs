@@ -1242,6 +1242,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         }
     }
 
@@ -1583,6 +1584,7 @@ mod tests {
             }],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
 
         let stats = ReportStats::from_report(&report);
@@ -1667,6 +1669,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, &[], "");
@@ -1691,6 +1694,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, &[], "");
@@ -1738,6 +1742,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, std::slice::from_ref(&dir), "");
@@ -1780,6 +1785,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, &[first_root, second_root], "");
@@ -1808,6 +1814,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, &[fake_root], "");
@@ -1845,6 +1852,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, std::slice::from_ref(&dir), "");
