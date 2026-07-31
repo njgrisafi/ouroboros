@@ -113,6 +113,9 @@ pub struct CyclesConfig {
 
     #[serde(default)]
     pub ignore: Vec<IgnoredCycle>,
+
+    #[serde(rename = "known-cyclic-files", default)]
+    pub known_cyclic_files: Vec<String>,
 }
 
 fn default_min_scc_size() -> usize {
@@ -125,6 +128,7 @@ impl Default for CyclesConfig {
             min_scc_size: default_min_scc_size(),
             max_scc_size: None,
             ignore: Vec::new(),
+            known_cyclic_files: Vec::new(),
         }
     }
 }
@@ -163,6 +167,31 @@ impl Config {
                 return Err(ConfigError::Validation(
                     "[[cycles.ignore]] entry must have at least one file".to_string(),
                 ));
+            }
+        }
+
+        for entry in &self.cycles.known_cyclic_files {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                return Err(ConfigError::Validation(
+                    "known-cyclic-files entry must not be empty".to_string(),
+                ));
+            }
+
+            let normalized = trimmed.replace('\\', "/");
+            if normalized.starts_with('/') {
+                return Err(ConfigError::Validation(format!(
+                    "known-cyclic-files entry must be a relative path, got absolute: {entry}"
+                )));
+            }
+            if normalized
+                .split('/')
+                .next()
+                .is_some_and(|seg| seg.contains(':'))
+            {
+                return Err(ConfigError::Validation(format!(
+                    "known-cyclic-files entry must be a relative path, got absolute: {entry}"
+                )));
             }
         }
 
@@ -427,6 +456,74 @@ files = []
 "#;
         let result = Config::from_toml(toml_str);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn known_cyclic_files_parses() {
+        let toml_str = r#"
+source-roots = ["."]
+
+[cycles]
+known-cyclic-files = ["pkg/a.py", "pkg/b.py"]
+"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert_eq!(
+            config.cycles.known_cyclic_files,
+            vec!["pkg/a.py".to_string(), "pkg/b.py".to_string()]
+        );
+    }
+
+    #[test]
+    fn known_cyclic_files_omitted_defaults_to_empty() {
+        let toml_str = r#"source-roots = ["."]"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert!(config.cycles.known_cyclic_files.is_empty());
+    }
+
+    #[test]
+    fn known_cyclic_files_empty_list_is_valid() {
+        let toml_str = r#"
+source-roots = ["."]
+
+[cycles]
+known-cyclic-files = []
+"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert!(config.cycles.known_cyclic_files.is_empty());
+    }
+
+    #[test]
+    fn known_cyclic_files_empty_string_entry_is_error() {
+        let toml_str = r#"
+source-roots = ["."]
+
+[cycles]
+known-cyclic-files = [""]
+"#;
+        let result = Config::from_toml(toml_str);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("empty"), "expected 'empty' in: {msg}");
+    }
+
+    #[test]
+    fn known_cyclic_files_absolute_path_is_error() {
+        let toml_str = r#"
+source-roots = ["."]
+
+[cycles]
+known-cyclic-files = ["/abs/x.py"]
+"#;
+        let result = Config::from_toml(toml_str);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("absolute"), "expected 'absolute' in: {msg}");
+    }
+
+    #[test]
+    fn known_cyclic_files_default_is_empty() {
+        let config = CyclesConfig::default();
+        assert!(config.known_cyclic_files.is_empty());
     }
 
     #[test]
