@@ -52,6 +52,11 @@ pub struct Config {
     /// Cycle reporting configuration.
     #[serde(default)]
     pub cycles: CyclesConfig,
+
+    /// Paths (files or directories) to exclude from analysis seeds.
+    /// Excluded files reachable via imports from non-excluded files are still reported.
+    #[serde(default)]
+    pub exclude: Vec<String>,
 }
 
 /// Configuration for the parser subsystem.
@@ -161,6 +166,31 @@ impl Config {
             }
         }
 
+        for entry in &self.exclude {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                return Err(ConfigError::Validation(
+                    "exclude entry must not be empty".to_string(),
+                ));
+            }
+
+            let normalized = trimmed.replace('\\', "/");
+            if normalized.starts_with('/') {
+                return Err(ConfigError::Validation(format!(
+                    "exclude entry must be a relative path, got absolute: {entry}"
+                )));
+            }
+            if normalized
+                .split('/')
+                .next()
+                .is_some_and(|seg| seg.contains(':'))
+            {
+                return Err(ConfigError::Validation(format!(
+                    "exclude entry must be a relative path, got absolute: {entry}"
+                )));
+            }
+        }
+
         Ok(())
     }
 }
@@ -172,6 +202,7 @@ impl Default for Config {
             parse: ParseConfig::default(),
             resolve: ResolveConfig::default(),
             cycles: CyclesConfig::default(),
+            exclude: Vec::new(),
         }
     }
 }
@@ -396,5 +427,77 @@ files = []
 "#;
         let result = Config::from_toml(toml_str);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn exclude_field_parses() {
+        let toml_str = r#"
+source-roots = ["."]
+exclude = ["tests", "a/b.py"]
+"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert_eq!(
+            config.exclude,
+            vec!["tests".to_string(), "a/b.py".to_string()]
+        );
+    }
+
+    #[test]
+    fn exclude_omitted_defaults_to_empty() {
+        let toml_str = r#"source-roots = ["."]"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert!(config.exclude.is_empty());
+    }
+
+    #[test]
+    fn exclude_empty_list_is_valid() {
+        let toml_str = r#"
+source-roots = ["."]
+exclude = []
+"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert!(config.exclude.is_empty());
+    }
+
+    #[test]
+    fn exclude_empty_string_entry_is_error() {
+        let toml_str = r#"
+source-roots = ["."]
+exclude = [""]
+"#;
+        let result = Config::from_toml(toml_str);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("empty"), "expected 'empty' in: {msg}");
+    }
+
+    #[test]
+    fn exclude_absolute_path_is_error() {
+        let toml_str = r#"
+source-roots = ["."]
+exclude = ["/abs/path.py"]
+"#;
+        let result = Config::from_toml(toml_str);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("absolute"), "expected 'absolute' in: {msg}");
+    }
+
+    #[test]
+    fn exclude_windows_absolute_path_is_error() {
+        let toml_str = r#"
+source-roots = ["."]
+exclude = ["C:/Users/project/app.py"]
+"#;
+        let result = Config::from_toml(toml_str);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("absolute"), "expected 'absolute' in: {msg}");
+    }
+
+    #[test]
+    fn default_config_exclude_is_empty() {
+        let config = Config::default();
+        assert!(config.exclude.is_empty());
     }
 }
