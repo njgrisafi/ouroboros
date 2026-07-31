@@ -1,0 +1,4 @@
+source-roots = ["src"]
+
+[cycles]
+known-cyclic-files = ["app/a.py", "app/b.py"]
