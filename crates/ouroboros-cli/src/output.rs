@@ -98,7 +98,9 @@ pub struct JsonCyclicFilesReport {
     pub cyclic_files: Vec<String>,
 }
 
-pub fn build_dump_cyclic_files_report(cyclic_files: &[std::path::PathBuf]) -> JsonCyclicFilesReport {
+pub fn build_dump_cyclic_files_report(
+    cyclic_files: &[std::path::PathBuf],
+) -> JsonCyclicFilesReport {
     JsonCyclicFilesReport {
         version: 1,
         cyclic_files: cyclic_files

@@ -147,7 +147,10 @@ fn dump_empty_when_no_cycles() {
         "--dump-cyclic-files",
     ]);
     let files = parsed["cyclic_files"].as_array().unwrap();
-    assert!(files.is_empty(), "cyclic_files should be empty when no cycles");
+    assert!(
+        files.is_empty(),
+        "cyclic_files should be empty when no cycles"
+    );
     assert_eq!(parsed["version"], 1);
     // Human mode
     let output = run_raw(&["--config", cfg.to_str().unwrap(), "--dump-cyclic-files"]);
