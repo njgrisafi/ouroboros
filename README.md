@@ -19,6 +19,7 @@ Designed for large monorepos with millions of lines of code.
 - JSON output (`--format json`) for programmatic consumption
 - Ignore list support (`[[cycles.ignore]]` in config) to suppress known cycles
 - `--dump-ignores` to bootstrap ignore lists from detected cycles
+- Track known cyclic files (`[cycles] known-cyclic-files`) to grandfather current cycles and block new ones; generate with `--dump-cyclic-files`, gate CI with `--check-cyclic-files`
 - `--strict` mode for CI enforcement (exit code 1 on cycles)
 - `--package` flag to filter to intra-package cycles only
 - Exclude paths from analysis seeds (`exclude` in config / `--exclude` flag); files reachable via imports from non-excluded paths are still reported
@@ -69,7 +70,7 @@ oboros --config path/to/oboros.toml
 All CLI flags:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--strict] [--no-include-ancestor-init] [--exclude <PATH>]
+oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--strict] [--no-include-ancestor-init] [--exclude <PATH>]
 ```
 
 See [USAGE.md](USAGE.md) for the full configuration reference and detailed usage instructions.
