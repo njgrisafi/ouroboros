@@ -102,6 +102,13 @@ struct Cli {
     /// array in the JSON report. No-op in human mode.
     #[arg(long)]
     show_cyclic_files: bool,
+
+    /// When set, files that become cyclic only via a derived ancestor-__init__.py edge
+    /// are excluded from the known-cyclic-files baseline. Overrides
+    /// [cycles] ignore-derived-ancestor-init in config. Baseline-only; does not affect
+    /// the normal cycle report.
+    #[arg(long = "ignore-derived-ancestor-init")]
+    ignore_derived_ancestor_init: bool,
 }
 
 /// Walk upward from `start` looking for `oboros.toml`.
@@ -224,6 +231,10 @@ fn main() {
     // CLI flag overrides config: --no-include-ancestor-init forces the option off.
     if cli.no_include_ancestor_init {
         config.resolve.include_ancestor_init = false;
+    }
+
+    if cli.ignore_derived_ancestor_init {
+        config.cycles.ignore_derived_ancestor_init = true;
     }
 
     let mut seen_excludes = std::collections::HashSet::new();
