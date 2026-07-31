@@ -392,7 +392,43 @@ fn main() {
     spinner.set_message("Detecting cycles...");
     let all_cycles = graph::dependency_cycles(&effective_graph);
     let size_filtered = cycles::filter_cycles_by_size(all_cycles, &config.cycles);
-    let cyclic_files: Vec<std::path::PathBuf> = cycles::collect_cyclic_files(&size_filtered);
+
+    let cyclic_surface_active =
+        cli.dump_cyclic_files || cli.check_cyclic_files || cli.show_cyclic_files;
+
+    // No-op warning: the option has no effect when include-ancestor-init is already disabled.
+    if config.cycles.ignore_derived_ancestor_init
+        && !config.resolve.include_ancestor_init
+        && cyclic_surface_active
+    {
+        eprintln!(
+            "warning: --ignore-derived-ancestor-init / [cycles] ignore-derived-ancestor-init \
+             has no effect when include-ancestor-init is disabled"
+        );
+    }
+
+    let cyclic_files: Vec<std::path::PathBuf> = if config.cycles.ignore_derived_ancestor_init
+        && config.resolve.include_ancestor_init
+        && cyclic_surface_active
+    {
+        // Direct-only pass: resolve without ancestor-init edges to compute the baseline.
+        // Reuses the same index (edge-independent) and excluded set (path-keyed).
+        let mut direct_config = config.clone();
+        direct_config.resolve.include_ancestor_init = false;
+        let direct_resolve = resolver::resolve_all(&discovery_result, &index, &direct_config);
+        let direct_graph = graph::build_file_dependency_graph(&discovery_result, &direct_resolve);
+        let direct_effective = if excluded.is_empty() {
+            direct_graph.graph
+        } else {
+            graph::apply_exclusions(&direct_graph.graph, &excluded)
+        };
+        let direct_cycles = graph::dependency_cycles(&direct_effective);
+        let direct_size_filtered = cycles::filter_cycles_by_size(direct_cycles, &config.cycles);
+        cycles::collect_cyclic_files(&direct_size_filtered)
+    } else {
+        cycles::collect_cyclic_files(&size_filtered)
+    };
+
     let filter_result = cycles::filter_ignored_cycles(size_filtered, &config.cycles.ignore);
 
     for ignored_entry in &config.cycles.ignore {
