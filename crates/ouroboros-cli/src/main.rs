@@ -86,6 +86,22 @@ struct Cli {
     /// Show detailed intermediate output (discovery, imports, graph).
     #[arg(long, short)]
     verbose: bool,
+
+    /// Print the sorted set of files participating in any cycle as a pasteable
+    /// TOML fragment (human) or JSON object (--format json), then exit.
+    #[arg(long)]
+    dump_cyclic_files: bool,
+
+    /// Compare the configured [cycles] known-cyclic-files list against the
+    /// freshly-computed cyclic-files set; exit 0 if identical, 1 if any
+    /// difference (with a human diff on stderr). Independent of --format.
+    #[arg(long)]
+    check_cyclic_files: bool,
+
+    /// Include the cyclic-files set as an optional top-level `cyclic_files`
+    /// array in the JSON report. No-op in human mode.
+    #[arg(long)]
+    show_cyclic_files: bool,
 }
 
 /// Walk upward from `start` looking for `oboros.toml`.
@@ -365,6 +381,7 @@ fn main() {
     spinner.set_message("Detecting cycles...");
     let all_cycles = graph::dependency_cycles(&effective_graph);
     let size_filtered = cycles::filter_cycles_by_size(all_cycles, &config.cycles);
+    let cyclic_files: Vec<std::path::PathBuf> = cycles::collect_cyclic_files(&size_filtered);
     let filter_result = cycles::filter_ignored_cycles(size_filtered, &config.cycles.ignore);
 
     for ignored_entry in &config.cycles.ignore {
@@ -394,7 +411,76 @@ fn main() {
 
     spinner.finish_and_clear();
 
-    if cli.dump_ignores {
+    if cli.check_cyclic_files {
+        use std::collections::BTreeSet;
+
+        let known: BTreeSet<String> = config
+            .cycles
+            .known_cyclic_files
+            .iter()
+            .map(|s| s.trim().replace('\\', "/"))
+            .collect();
+
+        let computed: BTreeSet<String> = cyclic_files
+            .iter()
+            .map(|p| p.display().to_string().replace('\\', "/"))
+            .collect();
+
+        if known == computed {
+            eprintln!("cyclic files unchanged ({} files)", computed.len());
+            return;
+        }
+
+        let added: Vec<&String> = computed
+            .difference(&known)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let removed: Vec<&String> = known
+            .difference(&computed)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+
+        eprintln!("cyclic files changed:");
+        for path in &added {
+            eprintln!("  + {path}");
+        }
+        for path in &removed {
+            eprintln!("  - {path}");
+        }
+        eprintln!(
+            "run `oboros --dump-cyclic-files` to update [cycles] known-cyclic-files in oboros.toml"
+        );
+        std::process::exit(1);
+    } else if cli.dump_cyclic_files {
+        match cli.format {
+            OutputFormat::Human => {
+                let paths: Vec<String> = cyclic_files
+                    .iter()
+                    .map(|p| p.display().to_string().replace('\\', "/"))
+                    .collect();
+                println!(
+                    "# paste under [cycles] in oboros.toml (merge into an existing [cycles] table if you have one)"
+                );
+                println!("[cycles]");
+                if paths.is_empty() {
+                    println!("known-cyclic-files = []");
+                } else {
+                    println!("known-cyclic-files = [");
+                    for path in &paths {
+                        println!("    \"{path}\",");
+                    }
+                    println!("]");
+                }
+            }
+            OutputFormat::Json => {
+                let report = output::build_dump_cyclic_files_report(&cyclic_files);
+                println!("{}", serde_json::to_string_pretty(&report).unwrap());
+            }
+        }
+        return;
+    } else if cli.dump_ignores {
         match cli.format {
             OutputFormat::Human => {
                 for cycle in &cycles {
@@ -574,6 +660,14 @@ fn main() {
                 traced,
                 unknown_paths,
                 applied_exclude_patterns,
+                if cli.show_cyclic_files {
+                    cyclic_files
+                        .iter()
+                        .map(|p| p.display().to_string().replace('\\', "/"))
+                        .collect()
+                } else {
+                    vec![]
+                },
             );
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
 

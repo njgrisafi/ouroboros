@@ -18,6 +18,8 @@ pub struct JsonReport {
     pub unknown_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excluded: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cyclic_files: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -88,6 +90,24 @@ pub struct JsonDumpIgnoresReport {
 #[derive(Debug, Serialize, PartialEq)]
 pub struct JsonIgnoreEntry {
     pub files: Vec<String>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+pub struct JsonCyclicFilesReport {
+    pub version: u32,
+    pub cyclic_files: Vec<String>,
+}
+
+pub fn build_dump_cyclic_files_report(
+    cyclic_files: &[std::path::PathBuf],
+) -> JsonCyclicFilesReport {
+    JsonCyclicFilesReport {
+        version: 1,
+        cyclic_files: cyclic_files
+            .iter()
+            .map(|p| p.display().to_string().replace('\\', "/"))
+            .collect(),
+    }
 }
 
 /// Collect sorted, deduplicated import lines for a file within a cycle.
@@ -164,6 +184,7 @@ pub fn build_json_report(
     traced: Vec<JsonTrace>,
     unknown_paths: Vec<String>,
     excluded: Vec<String>,
+    cyclic_files: Vec<String>,
 ) -> JsonReport {
     let cycle_data = order_cycles(kept_cycles);
 
@@ -218,6 +239,7 @@ pub fn build_json_report(
         traced,
         unknown_paths,
         excluded,
+        cyclic_files,
     }
 }
 
@@ -450,7 +472,7 @@ mod tests {
     #[test]
     fn empty_report_serializes_correctly() {
         let edge_metadata = make_edge_metadata(&[]);
-        let report = build_json_report(&[], 0, &edge_metadata, vec![], vec![], vec![]);
+        let report = build_json_report(&[], 0, &edge_metadata, vec![], vec![], vec![], vec![]);
 
         assert_eq!(report.version, 1);
         assert_eq!(report.summary.cycles_reported, 0);
@@ -467,7 +489,7 @@ mod tests {
         let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
         let edge_metadata =
             make_edge_metadata(&[("a.py", "b.py", vec![10]), ("b.py", "a.py", vec![5])]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![], vec![]);
 
         assert_eq!(report.cycles.len(), 1);
         assert_eq!(report.cycles[0].index, 1);
@@ -486,7 +508,7 @@ mod tests {
             vec![PathBuf::from("x.py"), PathBuf::from("y.py")],
         ];
         let edge_metadata = make_edge_metadata(&[]);
-        let report = build_json_report(&kept, 1, &edge_metadata, vec![], vec![], vec![]);
+        let report = build_json_report(&kept, 1, &edge_metadata, vec![], vec![], vec![], vec![]);
 
         assert_eq!(report.summary.cycles_reported, 2);
         assert_eq!(report.summary.cycles_suppressed, 1);
@@ -499,7 +521,7 @@ mod tests {
     fn import_lines_sorted_and_deduped() {
         let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
         let edge_metadata = make_edge_metadata(&[("a.py", "b.py", vec![30, 10, 10, 20])]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![], vec![]);
 
         assert_eq!(report.cycles[0].files[0].import_lines, vec![10, 20, 30]);
     }
@@ -537,7 +559,7 @@ mod tests {
         ]];
         let edge_metadata =
             make_edge_metadata(&[("a.py", "b.py", vec![1]), ("b.py", "c.py", vec![2])]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![], vec![]);
 
         assert_eq!(report.cycles[0].files[2].path, "c.py");
         assert!(report.cycles[0].files[2].import_lines.is_empty());
@@ -547,7 +569,7 @@ mod tests {
     fn json_round_trip_is_valid() {
         let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
         let edge_metadata = make_edge_metadata(&[("a.py", "b.py", vec![7])]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![], vec![]);
 
         let json = serde_json::to_string_pretty(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -632,7 +654,7 @@ mod tests {
             vec![PathBuf::from("a.py"), PathBuf::from("b.py")],
         ];
         let edge_metadata = make_edge_metadata(&[]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![], vec![]);
 
         assert_eq!(report.cycles[0].packages, vec!["pkg".to_string()]);
         assert_eq!(
@@ -655,7 +677,7 @@ mod tests {
             vec![PathBuf::from("beta/x.py"), PathBuf::from("beta/y.py")],
         ];
         let edge_metadata = make_edge_metadata(&[]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![], vec![]);
 
         assert_eq!(report.cycles[0].packages, vec!["alpha".to_string()]);
         assert_eq!(report.cycles[0].size, 2);
@@ -678,7 +700,7 @@ mod tests {
             vec![PathBuf::from("pkg/a.py"), PathBuf::from("pkg/b.py")],
         ];
         let edge_metadata = make_edge_metadata(&[]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![], vec![]);
 
         assert_eq!(report.cycles[0].packages, vec!["pkg".to_string()]);
         assert_eq!(report.cycles[1].packages, Vec::<String>::new());
@@ -688,7 +710,7 @@ mod tests {
     fn json_report_no_package_scoped_field() {
         let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
         let edge_metadata = make_edge_metadata(&[]);
-        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, vec![], vec![], vec![], vec![]);
 
         let json = serde_json::to_string_pretty(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -773,7 +795,7 @@ mod tests {
         assert!(traced.is_empty());
         assert!(unknown.is_empty());
 
-        let report = build_json_report(&kept, 0, &edge_metadata, traced, unknown, vec![]);
+        let report = build_json_report(&kept, 0, &edge_metadata, traced, unknown, vec![], vec![]);
         let json = serde_json::to_string_pretty(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(parsed.get("traced").is_none());
@@ -783,7 +805,7 @@ mod tests {
     #[test]
     fn excluded_field_omitted_when_empty() {
         let edge_metadata = make_edge_metadata(&[]);
-        let report = build_json_report(&[], 0, &edge_metadata, vec![], vec![], vec![]);
+        let report = build_json_report(&[], 0, &edge_metadata, vec![], vec![], vec![], vec![]);
         let json = serde_json::to_string_pretty(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert!(
@@ -802,11 +824,43 @@ mod tests {
             vec![],
             vec![],
             vec!["tests/".to_string()],
+            vec![],
         );
         let json = serde_json::to_string_pretty(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let excluded = parsed["excluded"].as_array().unwrap();
         assert_eq!(excluded.len(), 1);
         assert_eq!(excluded[0], "tests/");
+    }
+
+    #[test]
+    fn cyclic_files_field_omitted_when_empty() {
+        let edge_metadata = make_edge_metadata(&[]);
+        let report = build_json_report(&[], 0, &edge_metadata, vec![], vec![], vec![], vec![]);
+        let json = serde_json::to_string_pretty(&report).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            parsed.get("cyclic_files").is_none(),
+            "cyclic_files key should be absent when empty"
+        );
+    }
+
+    #[test]
+    fn cyclic_files_field_present_when_non_empty() {
+        let edge_metadata = make_edge_metadata(&[]);
+        let report = build_json_report(
+            &[],
+            0,
+            &edge_metadata,
+            vec![],
+            vec![],
+            vec![],
+            vec!["pkg/a.py".to_string()],
+        );
+        let json = serde_json::to_string_pretty(&report).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let files = parsed["cyclic_files"].as_array().unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0], "pkg/a.py");
     }
 }

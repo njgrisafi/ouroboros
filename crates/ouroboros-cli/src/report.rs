@@ -199,11 +199,12 @@ pub fn generate_html(
     let date = Local::now().format("%Y-%m-%d").to_string();
 
     write_head(&mut html, &date);
-    write_nav(&mut html, stats, &report.traced);
+    write_nav(&mut html, stats, &report.traced, &report.cyclic_files);
     write_summary(&mut html, stats);
     write_package_table(&mut html, &stats.package_frequency);
     write_size_table(&mut html, &stats.size_distribution);
     write_cycle_table(&mut html, &report.cycles, source_roots);
+    write_cyclic_files_section(&mut html, &report.cyclic_files);
     write_cycle_impact_index(&mut html, &report.traced, traces_filename);
     write_scripts(&mut html);
     html.push_str("</body>\n</html>\n");
@@ -403,7 +404,12 @@ fn write_head(html: &mut String, date: &str) {
     );
 }
 
-fn write_nav(html: &mut String, stats: &ReportStats, traced: &[crate::output::JsonTrace]) {
+fn write_nav(
+    html: &mut String,
+    stats: &ReportStats,
+    traced: &[crate::output::JsonTrace],
+    cyclic_files: &[String],
+) {
     html.push_str("    <nav class=\"toc\">\n");
     html.push_str("        <div class=\"toc-title\">Jump to</div>\n");
     html.push_str("        <ul class=\"toc-list\">\n");
@@ -415,6 +421,9 @@ fn write_nav(html: &mut String, stats: &ReportStats, traced: &[crate::output::Js
         html.push_str("            <li><a href=\"#size-dist\">Cycle Sizes</a></li>\n");
     }
     html.push_str("            <li><a href=\"#all-cycles\">All Cycles</a></li>\n");
+    if !cyclic_files.is_empty() {
+        html.push_str("            <li><a href=\"#cyclic-files\">Known Cyclic Files</a></li>\n");
+    }
     if !traced.is_empty() {
         html.push_str("            <li><a href=\"#cycle-impact\">Cycle Impact</a></li>\n");
     }
@@ -570,6 +579,32 @@ fn write_cycle_table(html: &mut String, cycles: &[JsonCycle], source_roots: &[Pa
             html.push_str("            </div>\n");
         }
         html.push_str("        </div></td></tr>\n");
+    }
+    html.push_str("    </table>\n");
+}
+
+fn write_cyclic_files_section(html: &mut String, cyclic_files: &[String]) {
+    if cyclic_files.is_empty() {
+        return;
+    }
+    html.push_str("    <span id=\"cyclic-files\" class=\"section-anchor\"></span>\n");
+    let _ = write!(
+        html,
+        "\n    <h2>Known Cyclic Files <a href=\"#top\" class=\"back-top\">\u{2191} top</a></h2>\n"
+    );
+    let _ = writeln!(
+        html,
+        "    <p>{} file{} participating in a cycle</p>",
+        cyclic_files.len(),
+        if cyclic_files.len() == 1 { "" } else { "s" }
+    );
+    html.push_str("    <table>\n        <tr><th>File</th></tr>\n");
+    for path in cyclic_files {
+        let _ = writeln!(
+            html,
+            "        <tr><td class=\"files\">{}</td></tr>",
+            html_escape(path)
+        );
     }
     html.push_str("    </table>\n");
 }
@@ -1242,6 +1277,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         }
     }
 
@@ -1583,6 +1619,7 @@ mod tests {
             }],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
 
         let stats = ReportStats::from_report(&report);
@@ -1609,6 +1646,41 @@ mod tests {
         assert!(
             !html.contains("Cycle Impact"),
             "HTML should NOT contain Cycle Impact section when traced is empty"
+        );
+    }
+
+    #[test]
+    fn html_with_cyclic_files_contains_section() {
+        let report = JsonReport {
+            version: 1,
+            summary: JsonSummary {
+                cycles_reported: 0,
+                cycles_suppressed: 0,
+            },
+            cycles: vec![],
+            traced: vec![],
+            unknown_paths: vec![],
+            excluded: vec![],
+            cyclic_files: vec!["pkg/a.py".to_string(), "pkg/b.py".to_string()],
+        };
+        let stats = ReportStats::from_report(&report);
+        let html = generate_html(&report, &stats, &[], "");
+        assert!(
+            html.contains("Known Cyclic Files"),
+            "HTML should contain Known Cyclic Files section"
+        );
+        assert!(html.contains("pkg/a.py"), "HTML should contain pkg/a.py");
+        assert!(html.contains("pkg/b.py"), "HTML should contain pkg/b.py");
+    }
+
+    #[test]
+    fn html_without_cyclic_files_has_no_section() {
+        let report = make_report(vec![], 0);
+        let stats = ReportStats::from_report(&report);
+        let html = generate_html(&report, &stats, &[], "");
+        assert!(
+            !html.contains("Known Cyclic Files"),
+            "HTML should NOT contain Known Cyclic Files section when cyclic_files is empty"
         );
     }
 
@@ -1667,6 +1739,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, &[], "");
@@ -1691,6 +1764,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, &[], "");
@@ -1738,6 +1812,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, std::slice::from_ref(&dir), "");
@@ -1780,6 +1855,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, &[first_root, second_root], "");
@@ -1808,6 +1884,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, &[fake_root], "");
@@ -1845,6 +1922,7 @@ mod tests {
             traced: vec![],
             unknown_paths: vec![],
             excluded: vec![],
+            cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, std::slice::from_ref(&dir), "");
