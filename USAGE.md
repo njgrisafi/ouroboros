@@ -5,7 +5,7 @@
 The binary is called `oboros`. Usage:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--strict] [--no-include-ancestor-init] [--exclude <PATH>]
+oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--strict] [--no-include-ancestor-init] [--exclude <PATH>]
 ```
 
 | Flag | Description |
@@ -17,6 +17,7 @@ oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--d
 | `--dump-cyclic-files` | Print the sorted set of files participating in any cycle as a pasteable TOML fragment (human) or JSON object (`--format json`), then exit. |
 | `--check-cyclic-files` | Compare `[cycles] known-cyclic-files` in config against the freshly-computed set; exit 0 if identical, exit 1 if any difference (with a human diff on stderr). Independent of `--format`. Short-circuits the normal report. |
 | `--show-cyclic-files` | Include the cyclic-files set as an optional top-level `cyclic_files` array in the JSON report. No-op in human mode. |
+| `--ignore-derived-ancestor-init` | Exclude files that are cyclic only via a derived ancestor-`__init__.py` edge from the known-cyclic-files baseline. Overrides `[cycles] ignore-derived-ancestor-init` in config. Baseline-only; does not affect the normal cycle report. |
 | `--strict` | Exit with code 1 if any (non-suppressed) cycles are detected. When `--trace` is also present, exits 1 only if the union of impacting cycles across all traced paths is non-empty. Works with both output formats. |
 | `--no-include-ancestor-init` | Disable ancestor-package `__init__.py` edges. Overrides `include-ancestor-init` in config. See [`[resolve]` section](#resolve-section). |
 | `--trace <PATH>`, `-t <PATH>` | Report cycles that impact the given file or directory path(s), relative to a source root. Repeatable and/or comma-separated. When omitted, output is identical to today. See [Cycle impact](#cycle-impact---trace). |
@@ -182,7 +183,7 @@ known-cyclic-files = [
 - **Dependent on `exclude`/`--exclude`** and `include-ancestor-init`: these change the analyzed graph.
 - **Dependent on `min-scc-size`/`max-scc-size`**: re-run `--dump-cyclic-files` after changing size bounds.
 
-> **Note:** In this initial version, files pulled into a cycle via ancestor-`__init__.py` edges (the `include-ancestor-init` mechanism) are counted. A future flag to exclude those derived cycles is planned.
+> **Note:** In this initial version, files pulled into a cycle via ancestor-`__init__.py` edges (the `include-ancestor-init` mechanism) are counted. This is now available via `[cycles] ignore-derived-ancestor-init` (see below).
 
 **Validation:** empty-string entries and absolute paths are rejected with an error.
 
@@ -230,6 +231,31 @@ oboros --format json --show-cyclic-files
 ```
 
 Adds an optional top-level `cyclic_files` array to the JSON report. Omitted when the flag is not set (existing-consumer safe; `version` stays `1`). The HTML `report` subcommand renders a "Known Cyclic Files" section when the field is present.
+
+#### `[cycles] ignore-derived-ancestor-init`
+
+When `true`, files that become cyclic **only** because of a derived ancestor-`__init__.py` edge are excluded from the known-cyclic-files baseline. Default: `false` (existing behavior).
+
+```toml
+[cycles]
+ignore-derived-ancestor-init = true
+```
+
+**Scope: baseline-only.** This option affects only `--dump-cyclic-files`, `--check-cyclic-files`, `--show-cyclic-files`, and the JSON/HTML `cyclic_files` list. The normal cycle report, `--strict`, JSON `cycles`, and HTML cycle table are unchanged.
+
+**Mechanism:** a file is counted in the baseline only if it participates in a cycle of the *direct-import-only* graph (ancestor-`__init__.py` edges removed). Cycles that close only through a derived ancestor edge disappear from the baseline; genuine direct `__init__.py` cycles are still counted.
+
+**Interaction with `include-ancestor-init`:** this option is a no-op when `include-ancestor-init = false` (there are no derived edges to strip). In that case the tool prints a warning to stderr.
+
+**CLI:** `--ignore-derived-ancestor-init` forces the option on; there is no inverse flag (set `false` via config, which is the default).
+
+**Regenerate workflow:** enabling this option changes the computed baseline. A `known-cyclic-files` list generated without it will be flagged as stale by `--check-cyclic-files` (the now-ancestor-only files show as `- removed`). After enabling, re-run:
+
+```bash
+oboros --dump-cyclic-files --ignore-derived-ancestor-init
+```
+
+and update `[cycles] known-cyclic-files`.
 
 #### Action-flag precedence
 
