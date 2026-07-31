@@ -35,7 +35,7 @@ impl From<toml::de::Error> for ConfigError {
 }
 
 /// Project configuration, typically deserialized from `oboros.toml`.
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Config {
     /// First-party source roots relative to the project root.
     #[serde(rename = "source-roots")]
@@ -60,7 +60,7 @@ pub struct Config {
 }
 
 /// Configuration for the parser subsystem.
-#[derive(Debug, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 pub struct ParseConfig {
     /// Whether to include imports nested inside functions, methods, and
     /// control-flow blocks (i.e. "local" imports).
@@ -72,7 +72,7 @@ pub struct ParseConfig {
 }
 
 /// Configuration for the resolver subsystem.
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct ResolveConfig {
     /// Whether to also record dependency edges to the `__init__.py` files of
     /// every first-party ancestor package of an imported module.
@@ -103,7 +103,7 @@ pub struct IgnoredCycle {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct CyclesConfig {
     #[serde(rename = "min-scc-size", default = "default_min_scc_size")]
     pub min_scc_size: usize,
@@ -116,6 +116,9 @@ pub struct CyclesConfig {
 
     #[serde(rename = "known-cyclic-files", default)]
     pub known_cyclic_files: Vec<String>,
+
+    #[serde(rename = "ignore-derived-ancestor-init", default)]
+    pub ignore_derived_ancestor_init: bool,
 }
 
 fn default_min_scc_size() -> usize {
@@ -129,6 +132,7 @@ impl Default for CyclesConfig {
             max_scc_size: None,
             ignore: Vec::new(),
             known_cyclic_files: Vec::new(),
+            ignore_derived_ancestor_init: false,
         }
     }
 }
@@ -524,6 +528,43 @@ known-cyclic-files = ["/abs/x.py"]
     fn known_cyclic_files_default_is_empty() {
         let config = CyclesConfig::default();
         assert!(config.known_cyclic_files.is_empty());
+    }
+
+    #[test]
+    fn ignore_derived_ancestor_init_parses_true() {
+        let toml_str = r#"
+source-roots = ["."]
+
+[cycles]
+ignore-derived-ancestor-init = true
+"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert!(config.cycles.ignore_derived_ancestor_init);
+    }
+
+    #[test]
+    fn ignore_derived_ancestor_init_parses_false() {
+        let toml_str = r#"
+source-roots = ["."]
+
+[cycles]
+ignore-derived-ancestor-init = false
+"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert!(!config.cycles.ignore_derived_ancestor_init);
+    }
+
+    #[test]
+    fn ignore_derived_ancestor_init_omitted_defaults_to_false() {
+        let toml_str = r#"source-roots = ["."]"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert!(!config.cycles.ignore_derived_ancestor_init);
+    }
+
+    #[test]
+    fn ignore_derived_ancestor_init_default_is_false() {
+        let config = CyclesConfig::default();
+        assert!(!config.ignore_derived_ancestor_init);
     }
 
     #[test]

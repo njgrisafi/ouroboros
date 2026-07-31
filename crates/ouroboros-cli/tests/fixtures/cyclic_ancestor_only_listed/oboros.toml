@@ -1,0 +1,4 @@
+source-roots = ["src"]
+
+[cycles]
+known-cyclic-files = ["alpha/__init__.py", "beta/helpers.py"]

@@ -299,6 +299,10 @@ fn write_head(html: &mut String, date: &str) {
         }
         .search-clear:hover { color: #333; }
         .search-count { font-size: 0.8rem; color: #666; margin-top: 0.4rem; }
+        .cyclic-list { list-style: none; margin: 0; padding: 0; max-height: 420px; overflow-y: auto; background: #fff; border: 1px solid #eee; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .cyclic-file { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.8rem; color: #444; padding: 0.4rem 1rem; border-bottom: 1px solid #f0f0f0; }
+        .cyclic-file:last-child { border-bottom: none; }
+        .cyclic-file.hidden { display: none; }
         .line-nums { color: #888; font-size: 0.75rem; }
         /* Cycle table expand */
         .cycle-row { cursor: pointer; }
@@ -598,15 +602,15 @@ fn write_cyclic_files_section(html: &mut String, cyclic_files: &[String]) {
         cyclic_files.len(),
         if cyclic_files.len() == 1 { "" } else { "s" }
     );
-    html.push_str("    <table>\n        <tr><th>File</th></tr>\n");
+    html.push_str(
+        "    <div class=\"search-container\"><input type=\"text\" id=\"cyclic-search\" class=\"search-input\" placeholder=\"Filter files\u{2026}\"><button id=\"cyclic-search-clear\" class=\"search-clear\">&times;</button></div>\n    <div id=\"cyclic-search-count\" class=\"search-count\"></div>\n",
+    );
+    html.push_str("    <ul id=\"cyclic-files-list\" class=\"cyclic-list\">\n");
     for path in cyclic_files {
-        let _ = writeln!(
-            html,
-            "        <tr><td class=\"files\">{}</td></tr>",
-            html_escape(path)
-        );
+        let escaped = html_escape(path);
+        let _ = writeln!(html, "        <li class=\"cyclic-file\">{escaped}</li>");
     }
-    html.push_str("    </table>\n");
+    html.push_str("    </ul>\n");
 }
 
 fn trace_slug(trace_path: &str) -> String {
@@ -1212,6 +1216,26 @@ document.addEventListener('DOMContentLoaded', function() {
         cb.addEventListener('click', function() { si.value = ''; filterRows(); si.focus(); });
         filterRows();
     }
+    var cs = document.getElementById('cyclic-search');
+    var csClear = document.getElementById('cyclic-search-clear');
+    var csCount = document.getElementById('cyclic-search-count');
+    var cItems = Array.prototype.slice.call(document.querySelectorAll('#cyclic-files-list .cyclic-file'));
+    if (cs && cItems.length) {
+        function filterCyclic() {
+            var term = cs.value.toLowerCase().trim();
+            csClear.style.display = term ? 'block' : 'none';
+            var visible = 0;
+            cItems.forEach(function(li) {
+                var show = !term || li.textContent.toLowerCase().indexOf(term) !== -1;
+                li.classList.toggle('hidden', !show);
+                if (show) visible++;
+            });
+            csCount.textContent = 'Showing ' + visible + ' of ' + cItems.length + ' files';
+        }
+        cs.addEventListener('input', filterCyclic);
+        csClear.addEventListener('click', function() { cs.value = ''; filterCyclic(); cs.focus(); });
+        filterCyclic();
+    }
 });
 </script>
 "#,
@@ -1671,6 +1695,14 @@ mod tests {
         );
         assert!(html.contains("pkg/a.py"), "HTML should contain pkg/a.py");
         assert!(html.contains("pkg/b.py"), "HTML should contain pkg/b.py");
+        assert!(
+            html.contains("id=\"cyclic-search\""),
+            "should have a filter search input"
+        );
+        assert!(
+            html.contains("cyclic-list"),
+            "should have a scrolling list container"
+        );
     }
 
     #[test]
