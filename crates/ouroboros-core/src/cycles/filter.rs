@@ -100,6 +100,7 @@ mod tests {
             max_scc_size: Some(2),
             ignore: vec![],
             known_cyclic_files: vec![],
+            ignore_derived_ancestor_init: false,
         };
         let result = filter_cycles_by_size(cycles, &config);
         assert_eq!(result.len(), 1);
@@ -114,6 +115,7 @@ mod tests {
             max_scc_size: Some(5),
             ignore: vec![],
             known_cyclic_files: vec![],
+            ignore_derived_ancestor_init: false,
         };
         let result = filter_cycles_by_size(cycles, &config);
         assert_eq!(result.len(), 2);
@@ -129,6 +131,7 @@ mod tests {
             max_scc_size: None,
             ignore: vec![],
             known_cyclic_files: vec![],
+            ignore_derived_ancestor_init: false,
         };
         let result = filter_cycles_by_size(cycles, &config);
         assert_eq!(result.len(), 2);
@@ -152,6 +155,7 @@ mod tests {
             max_scc_size: None,
             ignore: vec![],
             known_cyclic_files: vec![],
+            ignore_derived_ancestor_init: false,
         };
         let result = filter_cycles_by_size(cycles, &config);
         assert!(result.is_empty());
