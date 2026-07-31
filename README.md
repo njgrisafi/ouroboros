@@ -21,6 +21,7 @@ Designed for large monorepos with millions of lines of code.
 - `--dump-ignores` to bootstrap ignore lists from detected cycles
 - `--strict` mode for CI enforcement (exit code 1 on cycles)
 - `--package` flag to filter to intra-package cycles only
+- Exclude paths from analysis seeds (`exclude` in config / `--exclude` flag); files reachable via imports from non-excluded paths are still reported
 
 See [USAGE.md](USAGE.md) for full details on every flag and config option.
 
@@ -68,7 +69,7 @@ oboros --config path/to/oboros.toml
 All CLI flags:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--strict] [--no-include-ancestor-init]
+oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--strict] [--no-include-ancestor-init] [--exclude <PATH>]
 ```
 
 See [USAGE.md](USAGE.md) for the full configuration reference and detailed usage instructions.

@@ -5,7 +5,7 @@
 The binary is called `oboros`. Usage:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--strict] [--no-include-ancestor-init]
+oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--strict] [--no-include-ancestor-init] [--exclude <PATH>]
 ```
 
 | Flag | Description |
@@ -17,6 +17,7 @@ oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--d
 | `--strict` | Exit with code 1 if any (non-suppressed) cycles are detected. When `--trace` is also present, exits 1 only if the union of impacting cycles across all traced paths is non-empty. Works with both output formats. |
 | `--no-include-ancestor-init` | Disable ancestor-package `__init__.py` edges. Overrides `include-ancestor-init` in config. See [`[resolve]` section](#resolve-section). |
 | `--trace <PATH>`, `-t <PATH>` | Report cycles that impact the given file or directory path(s), relative to a source root. Repeatable and/or comma-separated. When omitted, output is identical to today. See [Cycle impact](#cycle-impact---trace). |
+| `--exclude <PATH>` | Exclude paths (files or directories) from analysis seeds. Repeatable and/or comma-separated. Unioned with `exclude` in config. See [Exclude paths](#exclude-paths). |
 
 If no config file is found, built-in defaults are used (source root: `src`, top-level imports only, minimum SCC size: 2, ancestor `__init__.py` edges enabled).
 
@@ -162,6 +163,101 @@ oboros --dump-ignores --format json
 
 ---
 
+## Exclude paths
+
+The `exclude` option removes paths (files or directories) from the set of files analyzed as **seeds**, while still reporting any excluded file that is **reachable via imports from a non-excluded file**.
+
+This mirrors [mypy's `exclude`](https://mypy.readthedocs.io/en/stable/command_line.html#cmdoption-mypy-exclude): excluded paths are dropped from recursive discovery seeds, but import-following is unaffected. Only excluded files that are unreachable from every non-excluded seed are dropped from the output.
+
+### Configuration
+
+```toml
+# oboros.toml
+exclude = ["tests", "migrations/", "legacy/old_module.py"]
+```
+
+### CLI flag
+
+```bash
+# Exclude a directory
+oboros --exclude tests/
+
+# Exclude a specific file
+oboros --exclude legacy/old_module.py
+
+# Exclude multiple paths (comma-separated or repeated)
+oboros --exclude tests/,migrations/
+oboros --exclude tests/ --exclude migrations/
+
+# CLI excludes are unioned with config excludes
+oboros --exclude extra_dir/
+```
+
+### Semantics
+
+- **Excluded files that are reachable via imports from a non-excluded file are still reported.** This is the key behavior: `exclude` only removes files from the *seed* set, not from the analysis entirely.
+- **Excluded files that nothing non-excluded imports are dropped.** For example, a `tests/` directory that imports app code but is not imported by app code will be dropped entirely — it is not reachable from any non-excluded seed.
+- **Excluding one member of a mutual cycle with a non-excluded file does NOT hide the cycle.** Both files are mutually reachable, so both are retained.
+
+#### Example: excluding a test directory
+
+```toml
+source-roots = ["src"]
+exclude = ["tests"]
+```
+
+If `tests/test_auth.py` imports `app.auth` but nothing in `app/` imports `tests/`, then `tests/test_auth.py` is not reachable from any non-excluded seed and is dropped. Cycles within `tests/` are not reported.
+
+If `app/auth.py` imports `tests.helpers` (unusual but possible), then `tests/helpers.py` IS reachable from the non-excluded `app/` seed and will be reported.
+
+### Matching rules
+
+- Patterns are matched against **source-root-relative paths** (the same paths shown in cycle output, e.g. `app/main.py` not `src/app/main.py`).
+- Source-root prefixes are stripped automatically, so `src/app/main.py` and `app/main.py` both match the node `app/main.py` when `source-roots = ["src"]`.
+- A pattern matches either an **exact file** or a **directory prefix** (all files under that directory). A trailing `/` forces directory matching; without it, an exact file match is tried first, then directory prefix.
+- A bare `app/` pattern matches across **all source roots** — there is no per-root scoping.
+
+### Validation
+
+- Empty-string entries (`exclude = [""]`) are rejected with an error.
+- Absolute paths (`exclude = ["/abs/path.py"]`) are rejected with an error.
+- `exclude = []` is valid and means "no exclusions" (no-op).
+- A pattern that matches no first-party files produces a warning to stderr (exit code 0).
+
+### Interactions
+
+| Flag | Behavior with `--exclude` |
+|------|--------------------------|
+| `--trace` | Operates on the pruned graph. An excluded-unreachable path is an unknown path (warning + exit 0). |
+| `--strict` | Operates on the pruned graph. `--exclude` can suppress `--strict` failures by removing cycles. |
+| `--dump-ignores` | Reflects the pruned graph. Ignore entries for pruned cycles may become "unmatched" warnings. |
+| `--package` | Operates on the pruned graph. |
+| `[[cycles.ignore]]` | Existing ignore entries for cycles that are now pruned will produce "unmatched" warnings. |
+
+### JSON output
+
+When `--exclude` is used, the JSON report includes an optional top-level `excluded` array listing the applied normalized patterns:
+
+```json
+{
+  "version": 1,
+  "summary": { "cycles_reported": 0, "cycles_suppressed": 0 },
+  "cycles": [],
+  "excluded": ["tests/", "migrations/"]
+}
+```
+
+The `excluded` field is **omitted** when no excludes are applied (existing-consumer safe; `version` stays `1`).
+
+### Known limitations
+
+- **No parse-skipping speedup.** The MVP still parses all files; exclusion prunes the output graph, not the parse work. Parse-skipping is a planned future optimization.
+- **Multi-source-root path collisions.** If two source roots both contain a file at the same relative path (e.g. `src/utils/helper.py` and `lib/utils/helper.py` both produce node `utils/helper.py`), exclude behavior for that path is undefined. This is a pre-existing limitation.
+- **No per-root scoping.** A pattern like `app/` matches across all source roots.
+- **`report` subcommand / HTML output** does not surface exclude information yet.
+
+---
+
 ## Output
 
 Ouroboros prints its results to stdout in several sections:
@@ -297,6 +393,7 @@ When `--format json` is used, all verbose sections above are suppressed and a si
 | `cycles[].files[].import_lines` | array of integers | Sorted line numbers of imports to other cycle members. |
 | `cycles[].files[].edges[].to` | string | Import target path within the cycle. |
 | `cycles[].files[].edges[].lines` | array of integers | Sorted line numbers for that specific edge. |
+| `excluded` | array of strings | Applied exclude patterns. **Omitted** when no excludes were active. |
 
 Pipe to `jq` for filtering:
 
