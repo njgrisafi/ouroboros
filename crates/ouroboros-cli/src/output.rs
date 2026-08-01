@@ -386,10 +386,6 @@ pub fn build_traces(
     (traced_results, unknown_paths)
 }
 
-/// Resolve a raw path string to matched graph nodes, with source-root prefix stripping.
-///
-/// Returns `Some((PathMatch, resolved_display_string))` if the path matches any node,
-/// or `None` if no match. Mirrors the path-matching logic used by `--trace`.
 pub(crate) fn resolve_path_to_nodes(
     node_paths: &BTreeSet<PathBuf>,
     raw: &str,
@@ -399,22 +395,23 @@ pub(crate) fn resolve_path_to_nodes(
     let had_trailing_slash = raw.trim_end().ends_with('/');
     let path_to_match = PathBuf::from(&normalized);
 
-    match_trace_candidate(node_paths, &path_to_match, had_trailing_slash)
-        .map(|matched| (matched, normalized.clone()))
-        .or_else(|| {
-            for root in source_roots {
-                let root_prefix = root.trim_end_matches('/').to_string() + "/";
-                if let Some(stripped) = normalized.strip_prefix(&root_prefix) {
-                    let stripped_path = PathBuf::from(stripped);
-                    if let Some(matched) =
-                        match_trace_candidate(node_paths, &stripped_path, had_trailing_slash)
-                    {
-                        return Some((matched, stripped.to_string()));
-                    }
-                }
-            }
-            None
-        })
+    if let Some(matched) = match_trace_candidate(node_paths, &path_to_match, had_trailing_slash) {
+        return Some((matched, normalized.clone()));
+    }
+
+    for root in source_roots {
+        let root_prefix = root.trim_end_matches('/').to_string() + "/";
+        let candidate = format!("{root_prefix}{normalized}");
+        let candidate_path = PathBuf::from(&candidate);
+        if match_trace_candidate(node_paths, &candidate_path, had_trailing_slash).is_some() {
+            eprintln!(
+                "warning: '{normalized}' matched no files; paths are project-root-relative in 0.6.0 — did you mean '{candidate}'?"
+            );
+            return None;
+        }
+    }
+
+    None
 }
 
 pub(crate) fn normalize_trace_path(raw: &str) -> String {

@@ -120,7 +120,7 @@ JSON schema 1 -> 2). Main hazards are silent upgrade regressions in `[[cycles.ig
 
 ### Wave 2 — Flip node identity to project-root-relative
 
-- [ ] 3. **(W2) `discovery::discover()`: store `rel_path` project-root-relative; keep module name source-root-relative; add normalization; update `PythonFile` doc + unit tests.**
+- [x] 3. **(W2) `discovery::discover()`: store `rel_path` project-root-relative; keep module name source-root-relative; add normalization; update `PythonFile` doc + unit tests.**
   - References: `crates/ouroboros-core/src/discovery/mod.rs:14-77` (`PythonFile`, `discover`), `discovery/module_name.rs:15` (`module_name_for_path`), `discovery/walk.rs:8-24` (returns source-root-relative walk paths).
   - Behavior: for each `src_root` and each `walk_rel`: `module_name = module_name_for_path(&walk_rel)` (unchanged); `rel_path = node_path(src_root, &walk_rel)` where `node_path` normalizes: if `src_root` trimmed is `""`/`"."` -> `walk_rel`; else `PathBuf::from(src_root.trim_end_matches('/')).join(&walk_rel)`. Update the `PythonFile.rel_path` doc to "Path relative to the project root (e.g. `src/core/engine.py`)."
   - Acceptance: `cargo test -p ouroboros-core` green. Update `discover_single_root` to expect `["src/app.py","src/core/__init__.py","src/core/engine.py"]` while module names stay `["app","core","core.engine"]`; `discover_dot_root` stays `app.py`,`models/user.py`; `discover_multiple_roots` -> `src/a.py`,`lib/b.py`. Add a normalization unit-test table: root `"."`,`"src"`,`"src/"`,`"src\\pkg"` for file `a/b.py`.
@@ -128,7 +128,7 @@ JSON schema 1 -> 2). Main hazards are silent upgrade regressions in `[[cycles.ig
   - QA failure: assert module name is NOT `src.core.engine` (guard against accidentally deriving module from the prefixed path) — evidence in same file.
   - Commit: `feat(core)!: node paths are project-root-relative (module names unchanged)`.
 
-- [ ] 4. **(W2) `main.rs`: fix on-disk read + verbose discovery output for the new identity.**
+- [x] 4. **(W2) `main.rs`: fix on-disk read + verbose discovery output for the new identity.**
   - References: `crates/ouroboros-cli/src/main.rs:286-296` (read loop `root.path.join(&file.rel_path)`), `:255-269` (verbose discovery print).
   - Behavior: change the read to `let abs_path = project_root.join(&file.rel_path);` — worked example: `project_root = /proj`, `rel_path = src/core/engine.py` -> `/proj/src/core/engine.py` (correct); the old `root.path.join` would give `/proj/src/src/core/engine.py`. Verbose output: print `project root: {project_root}` once, then per file `  {rel_path} -> {module_name}` (now project-root-relative); keep the per-root header but do not double-show the prefix confusingly (show root count only, or print `source root: {root.path}` then project-root-relative files — pick the form that reads cleanly and document it in the commit).
   - Acceptance: `cargo run -p ouroboros-cli -- --config <multiroot>/oboros.toml -v` reads all files without "could not read" warnings; verbose lines show `src/...`/`lib/...` paths.
@@ -136,7 +136,7 @@ JSON schema 1 -> 2). Main hazards are silent upgrade regressions in `[[cycles.ig
   - QA failure: point at a project whose file is missing and confirm the read-warning path still fires with the correct absolute path.
   - Commit: `fix(cli): read source files via project_root and show project-root-relative verbose output`.
 
-- [ ] 5. **(W2) `graph/build.rs`: warn on module-name collision across roots (identity now unique).**
+- [x] 5. **(W2) `graph/build.rs`: warn on module-name collision across roots (identity now unique).**
   - References: `crates/ouroboros-core/src/graph/build.rs:22-61` (`module_to_path` last-writer-wins).
   - Behavior: when inserting into `module_to_path`, if the module name is already present with a *different* `rel_path`, collect it and emit a single stderr warning from the CLI (return collision info from core, or log via a returned `Vec<(String, Vec<PathBuf>)>` surfaced in `main.rs`). Keep resolution behavior (last-writer-wins) — this only informs the user of a genuine `utils.helper` vs `utils.helper` ambiguity. Node keys become project-root-relative automatically (no code change to keys).
   - Acceptance: `cargo test -p ouroboros-core` green; unit test: two roots producing the same module name yields one collision record; distinct module names yield none.
@@ -144,7 +144,7 @@ JSON schema 1 -> 2). Main hazards are silent upgrade regressions in `[[cycles.ig
   - QA failure: single-root project prints no collision warning.
   - Commit: `feat(core): warn on cross-root module-name collisions`.
 
-- [ ] 6. **(W2) Sweep existing unit + integration expectations that change purely due to path form (keep suite green after the flip).**
+- [x] 6. **(W2) Sweep existing unit + integration expectations that change purely due to path form (keep suite green after the flip).**
   - References: unit tests in `graph/build.rs`, `output.rs`, `cycles/filter.rs`, `cycles/collect.rs` that assert bare paths remain valid (they use fabricated paths, not discovery — audit each; most need NO change). Integration: `crates/ouroboros-cli/tests/*.rs` (`format_json.rs`, `exclude.rs`, `trace.rs`, `cyclic_files.rs`, `report.rs`, `package_filter.rs`, `ancestor_init.rs`, `package_relative_init.rs`, `ignore_derived_ancestor_init.rs`) with fixtures under `tests/fixtures/*` (all use `source-roots = ["src"]`).
   - Behavior: update expected paths from source-root-relative (`app/a.py`) to project-root-relative (`src/app/a.py`) for every fixture that uses a non-dot root. Do NOT change `--trace`/`--exclude`/ignore/known input strings yet if a test would then fail — those input-form changes belong to Wave 3; if a test couples both, move its update into the wave that makes it pass and leave a `// updated in W3` note. Package-grouping assertions must still show the package below the source root (e.g. `src/pkg/a.py` -> package `pkg`) thanks to Wave 1.
   - Acceptance: `cargo test --workspace` fully green.
