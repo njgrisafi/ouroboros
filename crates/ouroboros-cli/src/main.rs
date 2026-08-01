@@ -464,6 +464,29 @@ fn main() {
                 .collect::<Vec<_>>()
                 .join(", ");
             eprintln!("warning: ignore entry [{files_str}] did not match any detected cycle");
+            for root in &config.source_roots {
+                let root_prefix = root.trim_end_matches('/').to_string() + "/";
+                let prefixed: Vec<std::path::PathBuf> = ignored_entry
+                    .files
+                    .iter()
+                    .map(|f| std::path::PathBuf::from(format!("{root_prefix}{f}")))
+                    .collect();
+                let mut sorted_prefixed = prefixed.clone();
+                sorted_prefixed.sort();
+                if filter_result.suppressed.contains(&sorted_prefixed)
+                    || filter_result.kept.contains(&sorted_prefixed)
+                {
+                    let hint = prefixed
+                        .iter()
+                        .map(|p| format!("\"{}\"", p.display()))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    eprintln!(
+                        "  hint: ignore entry looks pre-0.6.0 (source-root-relative); rewrite to project-root-relative, e.g. files = [{hint}]"
+                    );
+                    break;
+                }
+            }
         }
     }
 
@@ -513,6 +536,18 @@ fn main() {
         }
         for path in &removed {
             eprintln!("  - {path}");
+        }
+        let all_added_are_prefixed = !added.is_empty()
+            && config.source_roots.iter().any(|root| {
+                let prefix = root.trim_end_matches('/').to_string() + "/";
+                removed
+                    .iter()
+                    .all(|r| added.iter().any(|a| a.as_str() == format!("{prefix}{r}")))
+            });
+        if all_added_are_prefixed {
+            eprintln!(
+                "  hint: known-cyclic-files uses pre-0.6.0 source-root-relative paths; run 'oboros --dump-cyclic-files' to regenerate."
+            );
         }
         eprintln!(
             "run `oboros --dump-cyclic-files` to update [cycles] known-cyclic-files in oboros.toml"
