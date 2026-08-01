@@ -91,6 +91,7 @@ pub fn resolve_all(
     discovery: &DiscoveryResult,
     index: &ModuleIndex,
     config: &Config,
+    project_root: &std::path::Path,
 ) -> ResolveResult {
     let include_local = config.parse.local_imports;
     let include_ancestor_init = config.resolve.include_ancestor_init;
@@ -99,7 +100,7 @@ pub fn resolve_all(
 
     for root in &discovery.roots {
         for file in &root.files {
-            let abs_path = root.path.join(&file.rel_path);
+            let abs_path = project_root.join(&file.rel_path);
 
             let source = match std::fs::read_to_string(&abs_path) {
                 Ok(s) => s,
