@@ -357,6 +357,15 @@ fn main() {
     spinner.set_message("Building dependency graph...");
     let graph_result = graph::build_file_dependency_graph(&discovery_result, &resolve_result);
 
+    for (module_name, paths) in &graph_result.module_collisions {
+        let path_list: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+        eprintln!(
+            "warning: module '{}' is defined by multiple files: {}",
+            module_name,
+            path_list.join(", ")
+        );
+    }
+
     if verbose {
         println!("\n--- dependency graph ---\n");
         let mut nodes: Vec<_> = graph_result.graph.keys().collect();

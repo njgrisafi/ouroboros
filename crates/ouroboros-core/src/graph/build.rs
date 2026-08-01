@@ -4,10 +4,6 @@ use std::path::PathBuf;
 use crate::discovery::DiscoveryResult;
 use crate::resolver::ResolveResult;
 
-/// A first-party file dependency graph.
-///
-/// - Key: relative file path of a first-party Python source file.
-/// - Value: sorted, deduplicated set of first-party file paths that the key depends on.
 pub type FileDependencyGraph = HashMap<PathBuf, BTreeSet<PathBuf>>;
 
 pub struct EdgeMetadata {
@@ -17,6 +13,7 @@ pub struct EdgeMetadata {
 pub struct FileGraphResult {
     pub graph: FileDependencyGraph,
     pub edge_metadata: EdgeMetadata,
+    pub module_collisions: Vec<(String, Vec<PathBuf>)>,
 }
 
 pub fn build_file_dependency_graph(
@@ -24,13 +21,35 @@ pub fn build_file_dependency_graph(
     resolve_result: &ResolveResult,
 ) -> FileGraphResult {
     let mut module_to_path: HashMap<&str, &PathBuf> = HashMap::new();
+    let mut collisions: HashMap<&str, Vec<&PathBuf>> = HashMap::new();
+
     for root in &discovery.roots {
         for file in &root.files {
             if !file.module_name.is_empty() {
+                if let Some(existing) = module_to_path
+                    .get(file.module_name.as_str())
+                    .filter(|e| **e != &file.rel_path)
+                {
+                    let entry = collisions
+                        .entry(&file.module_name)
+                        .or_insert_with(|| vec![existing]);
+                    if !entry.contains(&&file.rel_path) {
+                        entry.push(&file.rel_path);
+                    }
+                }
                 module_to_path.insert(&file.module_name, &file.rel_path);
             }
         }
     }
+
+    let module_collisions: Vec<(String, Vec<PathBuf>)> = collisions
+        .into_iter()
+        .map(|(name, paths)| {
+            let mut sorted = paths.into_iter().cloned().collect::<Vec<_>>();
+            sorted.sort();
+            (name.to_string(), sorted)
+        })
+        .collect();
 
     let mut graph: FileDependencyGraph = HashMap::new();
     for root in &discovery.roots {
@@ -57,6 +76,7 @@ pub fn build_file_dependency_graph(
     FileGraphResult {
         graph,
         edge_metadata: EdgeMetadata { lines: edge_lines },
+        module_collisions,
     }
 }
 
@@ -66,7 +86,6 @@ mod tests {
     use crate::discovery::{PythonFile, SourceRoot};
     use crate::resolver::ResolvedDep;
 
-    /// Helper: build a `DiscoveryResult` from `(rel_path, module_name)` pairs.
     fn make_discovery(files: &[(&str, &str)]) -> DiscoveryResult {
         let python_files = files
             .iter()
@@ -81,6 +100,36 @@ mod tests {
                 path: PathBuf::from("/fake/root"),
                 files: python_files,
             }],
+        }
+    }
+
+    fn make_discovery_two_roots(
+        root1_files: &[(&str, &str)],
+        root2_files: &[(&str, &str)],
+    ) -> DiscoveryResult {
+        DiscoveryResult {
+            roots: vec![
+                SourceRoot {
+                    path: PathBuf::from("/fake/src"),
+                    files: root1_files
+                        .iter()
+                        .map(|(p, m)| PythonFile {
+                            rel_path: PathBuf::from(p),
+                            module_name: m.to_string(),
+                        })
+                        .collect(),
+                },
+                SourceRoot {
+                    path: PathBuf::from("/fake/lib"),
+                    files: root2_files
+                        .iter()
+                        .map(|(p, m)| PythonFile {
+                            rel_path: PathBuf::from(p),
+                            module_name: m.to_string(),
+                        })
+                        .collect(),
+                },
+            ],
         }
     }
 
@@ -159,5 +208,29 @@ mod tests {
 
         assert_eq!(graph.len(), 1);
         assert!(graph.contains_key(&PathBuf::from("b.py")));
+    }
+
+    #[test]
+    fn cross_root_same_module_name_yields_collision() {
+        let discovery = make_discovery_two_roots(
+            &[("src/utils/helper.py", "utils.helper")],
+            &[("lib/utils/helper.py", "utils.helper")],
+        );
+        let resolve = make_resolve(&[]);
+
+        let result = build_file_dependency_graph(&discovery, &resolve);
+        assert_eq!(result.module_collisions.len(), 1);
+        assert_eq!(result.module_collisions[0].0, "utils.helper");
+        assert_eq!(result.module_collisions[0].1.len(), 2);
+    }
+
+    #[test]
+    fn distinct_module_names_yield_no_collision() {
+        let discovery =
+            make_discovery_two_roots(&[("src/app.py", "app")], &[("lib/utils.py", "utils")]);
+        let resolve = make_resolve(&[]);
+
+        let result = build_file_dependency_graph(&discovery, &resolve);
+        assert!(result.module_collisions.is_empty());
     }
 }
