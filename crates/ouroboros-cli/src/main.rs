@@ -31,9 +31,13 @@ enum Commands {
         #[arg(long, short, default_value = "report.html")]
         output: PathBuf,
 
-        /// Project source root for reading import lines. If provided, the report
+        /// Project root for reading import lines. If provided, the report
         /// shows actual import statements in the diff view.
         #[arg(long)]
+        root: Option<PathBuf>,
+
+        /// Deprecated: use --root instead.
+        #[arg(long, hide = true)]
         source_root: Option<PathBuf>,
     },
 }
@@ -188,10 +192,15 @@ fn main() {
     if let Some(Commands::Report {
         input,
         output,
+        root,
         source_root,
     }) = cli.command.as_ref()
     {
-        report::run(input, output, source_root.as_deref());
+        if source_root.is_some() {
+            eprintln!("warning: --source-root is deprecated; use --root instead");
+        }
+        let effective_root = root.as_deref().or(source_root.as_deref());
+        report::run(input, output, effective_root);
         return;
     }
 

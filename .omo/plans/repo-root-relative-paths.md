@@ -154,7 +154,7 @@ JSON schema 1 -> 2). Main hazards are silent upgrade regressions in `[[cycles.ig
 
 ### Wave 3 — Config/CLI path surface hard break (project-root-relative)
 
-- [ ] 7. **(W3) Remove source-root prefix stripping from `--trace`/`--exclude`; add a helpful no-match hint.**
+- [x] 7. **(W3) Remove source-root prefix stripping from `--trace`/`--exclude`; add a helpful no-match hint.**
   - References: `crates/ouroboros-cli/src/output.rs:381-416` (`resolve_path_to_nodes`, `normalize_trace_path`), `:249-379` (`build_traces` passes `source_roots`), `main.rs:369-385` (exclude loop), `:625-635` + `:697-707` (trace calls).
   - Behavior: match the normalized input directly against the (now project-root-relative) node set — delete the `source_roots` fallback branch. Drop the `source_roots` parameter from `resolve_path_to_nodes`/`build_traces` (or keep only for the hint). On no match, if prepending any `source_root/` to the input WOULD have matched a node, emit: `warning: '<input>' matched no files; paths are project-root-relative in 0.6.0 — did you mean '<src>/<input>'?`. `JsonTrace.path`/`excluded[]` display forms are now project-root-relative (H3/H4) — no special handling, just verify.
   - Acceptance: `cargo test --workspace` green after test updates; integration tests use project-root-relative `--trace src/app/...` / `--exclude src/tests/...`.
@@ -162,7 +162,7 @@ JSON schema 1 -> 2). Main hazards are silent upgrade regressions in `[[cycles.ig
   - QA failure: `oboros --trace app/entry.py` (old form) prints the "did you mean 'src/app/entry.py'?" hint and exits 0 with no match; capture evidence.
   - Commit: `feat(cli)!: --trace/--exclude paths are project-root-relative`.
 
-- [ ] 8. **(W3) Migration guard for `[[cycles.ignore]]` mismatches.**
+- [x] 8. **(W3) Migration guard for `[[cycles.ignore]]` mismatches.**
   - References: `crates/ouroboros-cli/src/main.rs:432-450` (ignore-entry warning loop), `cycles/filter.rs:35-57` (`filter_ignored_cycles` exact-set compare).
   - Behavior: matching logic unchanged (both sides project-root-relative now). Enhance the "did not match" warning: if the unmatched entry's files, once each is prefixed by some `source_root/`, WOULD match a detected cycle, emit a targeted hint: `ignore entry looks pre-0.6.0 (source-root-relative); rewrite to project-root-relative, e.g. 'src/pkg/a.py'`.
   - Acceptance: `cargo test --workspace` green; new integration test `ignore_migration_hint` with a `["src"]` fixture whose ignore entry omits the `src/` prefix triggers the hint and does NOT suppress the cycle.
@@ -170,7 +170,7 @@ JSON schema 1 -> 2). Main hazards are silent upgrade regressions in `[[cycles.ig
   - QA failure: a correctly project-root-relative ignore entry suppresses the cycle and emits no hint.
   - Commit: `feat(cli): migration hint for pre-0.6.0 [[cycles.ignore]] paths`.
 
-- [ ] 9. **(W3) Migration guard for `--check-cyclic-files`; confirm `--dump-cyclic-files`/`--dump-ignores` emit project-root-relative.**
+- [x] 9. **(W3) Migration guard for `--check-cyclic-files`; confirm `--dump-cyclic-files`/`--dump-ignores` emit project-root-relative.**
   - References: `crates/ouroboros-cli/src/main.rs:461-535` (`--check-cyclic-files`, `--dump-cyclic-files`), `:536-556` (`--dump-ignores`), `output.rs:102-114` + `:444-458` (dump report builders).
   - Behavior: on `--check-cyclic-files` mismatch, if every "added" path equals some `source_root/` + a "removed" path, emit before exiting 1: `known-cyclic-files uses pre-0.6.0 source-root-relative paths; run 'oboros --dump-cyclic-files' to regenerate.` `--dump-cyclic-files`/`--dump-ignores` already print node paths, so they now emit project-root-relative automatically — add assertions.
   - Acceptance: `cargo test --workspace` green; integration tests: `check_cyclic_files_migration_hint` (stale source-root-relative baseline -> hint + exit 1); `dump_cyclic_files_project_root_relative` (asserts `src/...`).
