@@ -1,0 +1,7 @@
+source-roots = ["src"]
+
+[cycles]
+# Pre-0.6.0 source-root-relative paths (bare, no `src/` prefix). The computed
+# cyclic files are project-root-relative (`src/app/a.py`, `src/app/b.py`), so
+# --check-cyclic-files fails and emits the migration hint.
+known-cyclic-files = ["app/a.py", "app/b.py"]
