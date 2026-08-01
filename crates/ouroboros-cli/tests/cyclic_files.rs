@@ -34,7 +34,7 @@ fn dump_json_lists_sorted_union() {
     ]);
     let files = parsed["cyclic_files"].as_array().unwrap();
     let paths: Vec<&str> = files.iter().map(|v| v.as_str().unwrap()).collect();
-    assert_eq!(paths, vec!["app/a.py", "app/b.py"]);
+    assert_eq!(paths, vec!["src/app/a.py", "src/app/b.py"]);
     assert_eq!(parsed["version"], 1);
 }
 
@@ -47,8 +47,14 @@ fn dump_human_prints_toml_fragment() {
         stdout.contains("known-cyclic-files = ["),
         "should contain array header"
     );
-    assert!(stdout.contains("\"app/a.py\""), "should contain app/a.py");
-    assert!(stdout.contains("\"app/b.py\""), "should contain app/b.py");
+    assert!(
+        stdout.contains("\"src/app/a.py\""),
+        "should contain src/app/a.py"
+    );
+    assert!(
+        stdout.contains("\"src/app/b.py\""),
+        "should contain src/app/b.py"
+    );
     assert_eq!(output.status.code().unwrap(), 0);
 }
 
@@ -93,7 +99,7 @@ fn check_fail_on_new_cyclic_file() {
         "should exit 1 on new cyclic file"
     );
     assert!(
-        stderr.contains("+ app/b.py"),
+        stderr.contains("+ src/app/b.py"),
         "stderr should show newly cyclic file"
     );
 }
@@ -109,7 +115,7 @@ fn check_fail_on_stale_entry() {
         "should exit 1 on stale entry"
     );
     assert!(
-        stderr.contains("- app/ghost.py"),
+        stderr.contains("- src/app/ghost.py"),
         "stderr should show stale entry"
     );
 }
@@ -125,11 +131,11 @@ fn check_fail_on_all_resolved() {
         "should exit 1 when all cycles resolved"
     );
     assert!(
-        stderr.contains("- app/a.py"),
+        stderr.contains("- src/app/a.py"),
         "stderr should show removed a.py"
     );
     assert!(
-        stderr.contains("- app/b.py"),
+        stderr.contains("- src/app/b.py"),
         "stderr should show removed b.py"
     );
     assert!(!stderr.contains("+ "), "stderr should have no additions");
@@ -173,12 +179,12 @@ fn check_fail_when_no_known_list_but_cycles() {
         "should exit 1 when no known list but cycles exist"
     );
     assert!(
-        stderr.contains("+ app/a.py"),
-        "stderr should list app/a.py as added"
+        stderr.contains("+ src/app/a.py"),
+        "stderr should list src/app/a.py as added"
     );
     assert!(
-        stderr.contains("+ app/b.py"),
-        "stderr should list app/b.py as added"
+        stderr.contains("+ src/app/b.py"),
+        "stderr should list src/app/b.py as added"
     );
 }
 
@@ -204,7 +210,7 @@ fn check_independent_of_ignore() {
     ]);
     let files = parsed["cyclic_files"].as_array().unwrap();
     let paths: Vec<&str> = files.iter().map(|v| v.as_str().unwrap()).collect();
-    assert_eq!(paths, vec!["app/a.py", "app/b.py"]);
+    assert_eq!(paths, vec!["src/app/a.py", "src/app/b.py"]);
 }
 
 #[test]
@@ -220,7 +226,7 @@ fn show_adds_json_field() {
     ]);
     let files = with_show["cyclic_files"].as_array().unwrap();
     let paths: Vec<&str> = files.iter().map(|v| v.as_str().unwrap()).collect();
-    assert_eq!(paths, vec!["app/a.py", "app/b.py"]);
+    assert_eq!(paths, vec!["src/app/a.py", "src/app/b.py"]);
     // Without --show-cyclic-files: field absent
     let without_show = run_json(&["--config", cfg.to_str().unwrap(), "--format", "json"]);
     assert!(

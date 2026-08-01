@@ -1,8 +1,8 @@
 source-roots = ["src"]
 
 [cycles]
-known-cyclic-files = ["app/a.py", "app/b.py"]
+known-cyclic-files = ["src/app/a.py", "src/app/b.py"]
 
 [[cycles.ignore]]
-files = ["app/a.py", "app/b.py"]
+files = ["src/app/a.py", "src/app/b.py"]
 reason = "testing ignore independence"

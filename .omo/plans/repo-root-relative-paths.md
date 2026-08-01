@@ -102,7 +102,7 @@ JSON schema 1 -> 2). Main hazards are silent upgrade regressions in `[[cycles.ig
 
 ### Wave 1 — Make package grouping source-root-aware (behavior-preserving refactor)
 
-- [ ] 1. **(W1) `ouroboros-core`: add `strip_source_root_prefix` helper + unit tests.**
+- [x] 1. **(W1) `ouroboros-core`: add `strip_source_root_prefix` helper + unit tests.**
   - References: new helper in `crates/ouroboros-core/src/graph/mod.rs` (or a new `path_util` module re-exported from `graph`); consumed later by `output.rs` and `cycles/filter.rs`. Model normalization on `output.rs::normalize_trace_path:412-416` (strip leading `./`, trailing `/`, `\\`->`/`).
   - Behavior: `strip_source_root_prefix(path: &Path, source_roots: &[String]) -> &Path` returns the longest matching `source_root/`-prefixed remainder, else the original path. Normalizes each source root (trim trailing `/`, `.`/"" means no prefix). On empty `source_roots`, returns the path unchanged.
   - Acceptance: `cargo test -p ouroboros-core` green; unit tests cover: `("src/pkg/a.py", ["src"]) -> "pkg/a.py"`; `("pkg/a.py", []) -> "pkg/a.py"`; `("src/a.py", ["src"]) -> "a.py"`; `("lib/x.py", ["src","lib"]) -> "x.py"`; nested-root longest-match `("src/pkg/a.py", ["src","src/pkg"]) -> "a.py"`; no-match `("app/a.py", ["src"]) -> "app/a.py"`.
@@ -110,7 +110,7 @@ JSON schema 1 -> 2). Main hazards are silent upgrade regressions in `[[cycles.ig
   - QA failure: temporarily assert a wrong expectation locally to confirm the test fails (revert) — evidence `/tmp/oboros-qa/w1_helper_negative.txt`.
   - Commit: `feat(core): add source-root prefix strip helper for package grouping`.
 
-- [ ] 2. **(W1) Make `package_of`/`packages_for_cycle` (output.rs) and `package_of`/`filter_cycles_by_package` (filter.rs) source-root-aware; thread `source_roots` through call sites.**
+- [x] 2. **(W1) Make `package_of`/`packages_for_cycle` (output.rs) and `package_of`/`filter_cycles_by_package` (filter.rs) source-root-aware; thread `source_roots` through call sites.**
   - References: `crates/ouroboros-cli/src/output.rs:142-181` (`package_of`, `packages_for_cycle`, `order_cycles`), `:183-247` (`build_json_report`), `crates/ouroboros-cli/src/main.rs:568-623` (human grouping), `:452-456` + `:709-724` (call sites), `crates/ouroboros-core/src/cycles/filter.rs:59-81` (`package_of`, `filter_cycles_by_package`) and its `main.rs:452-453` call site.
   - Behavior: each `package_of` first applies `strip_source_root_prefix` (1.1), then takes the first component. Thread `&config.source_roots` (or `&[String]`) into `packages_for_cycle`, `order_cycles`, `build_json_report`, the human grouping loop, and `filter_cycles_by_package`. On today's source-root-relative paths with real roots, stripping is a **no-op** (paths have no `src/` prefix yet) — existing outputs unchanged.
   - Acceptance: `cargo test --workspace` green with NO expectation changes (proves no-op). Update the unit-test call sites in `output.rs` tests (`packages_for_cycle(&cycle)` etc.) and `filter.rs` tests (`filter_cycles_by_package(cycles)`) to pass source_roots; use `&[]` where inputs are bare (preserves current expected packages).

@@ -38,10 +38,10 @@ fn cycle_through_package_init_relative_import_is_reported() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|f| f["path"].as_str() == Some("svc/staff.py"))
+            .any(|f| f["path"].as_str() == Some("src/svc/staff.py"))
     });
     assert!(
         touches_staff,
-        "the reported cycle should include svc/staff.py: {parsed}"
+        "the reported cycle should include src/svc/staff.py: {parsed}"
     );
 }
