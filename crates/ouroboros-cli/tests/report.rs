@@ -40,7 +40,7 @@ fn report_inconsistent_json_exits_nonzero() {
     let input_path = dir.join("oboros_integration_inconsistent.json");
     fs::write(
         &input_path,
-        r#"{"version":1,"summary":{"cycles_reported":2,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#,
+        r#"{"version":2,"summary":{"cycles_reported":2,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#,
     )
     .unwrap();
 
@@ -63,7 +63,7 @@ fn report_produces_html_file() {
     let output_path = dir.join("oboros_integration_report.html");
 
     let json = r#"{
-        "version": 1,
+        "version": 2,
         "summary": { "cycles_reported": 1, "cycles_suppressed": 0 },
         "cycles": [{
             "index": 1,
@@ -101,7 +101,7 @@ fn report_html_matches_cycle_count() {
     let output_path = dir.join("oboros_integration_count.html");
 
     let json = r#"{
-        "version": 1,
+        "version": 2,
         "summary": { "cycles_reported": 2, "cycles_suppressed": 1 },
         "cycles": [
             {
@@ -148,7 +148,7 @@ fn report_custom_output_path() {
 
     let _ = fs::remove_file(&output_path);
 
-    let json = r#"{"version":1,"summary":{"cycles_reported":0,"cycles_suppressed":0},"cycles":[]}"#;
+    let json = r#"{"version":2,"summary":{"cycles_reported":0,"cycles_suppressed":0},"cycles":[]}"#;
     fs::write(&input_path, json).unwrap();
 
     let status = oboros_bin()

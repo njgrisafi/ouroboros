@@ -35,7 +35,7 @@ fn dump_json_lists_sorted_union() {
     let files = parsed["cyclic_files"].as_array().unwrap();
     let paths: Vec<&str> = files.iter().map(|v| v.as_str().unwrap()).collect();
     assert_eq!(paths, vec!["src/app/a.py", "src/app/b.py"]);
-    assert_eq!(parsed["version"], 1);
+    assert_eq!(parsed["version"], 2);
 }
 
 #[test]
@@ -157,7 +157,7 @@ fn dump_empty_when_no_cycles() {
         files.is_empty(),
         "cyclic_files should be empty when no cycles"
     );
-    assert_eq!(parsed["version"], 1);
+    assert_eq!(parsed["version"], 2);
     // Human mode
     let output = run_raw(&["--config", cfg.to_str().unwrap(), "--dump-cyclic-files"]);
     let stdout = String::from_utf8(output.stdout).unwrap();

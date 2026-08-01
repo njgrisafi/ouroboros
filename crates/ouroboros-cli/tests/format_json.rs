@@ -46,7 +46,7 @@ fn json_output_has_correct_structure() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
-    assert_eq!(parsed["version"], 1, "version should be 1");
+    assert_eq!(parsed["version"], 2, "version should be 2");
     assert!(parsed["summary"].is_object(), "summary should be an object");
     assert!(parsed["cycles"].is_array(), "cycles should be an array");
 
@@ -145,7 +145,7 @@ fn dump_ignores_json() {
         panic!("dump-ignores json output not valid JSON: {e}\nstdout: {stdout}")
     });
 
-    assert_eq!(parsed["version"], 1);
+    assert_eq!(parsed["version"], 2);
     assert!(
         parsed["ignore_entries"].is_array(),
         "should have ignore_entries array"

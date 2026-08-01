@@ -1,14 +1,35 @@
 {
   "schema_version": 2,
-  "active_work_id": "repo-root-relative-paths",
+  "active_work_id": "repo-root-relative-paths-45564e5d",
   "works": {
-    "repo-root-relative-paths": {
-      "work_id": "repo-root-relative-paths",
-      "active_plan": ".omo/plans/repo-root-relative-paths.md",
+    "repo-root-relative-paths-45564e5d": {
+      "work_id": "repo-root-relative-paths-45564e5d",
+      "active_plan": "/Users/nick/workspace/ouroboros/.omo/plans/repo-root-relative-paths.md",
       "plan_name": "repo-root-relative-paths",
-      "session_ids": ["codex:current"],
       "status": "active",
-      "worktree_path": null
+      "started_at": "2026-08-01T18:52:02.960Z",
+      "updated_at": "2026-08-01T18:52:02.960Z",
+      "session_ids": [
+        "opencode:ses_041caea41ffecSjOHSWmclsp1t"
+      ],
+      "session_origins": {
+        "opencode:ses_041caea41ffecSjOHSWmclsp1t": "direct"
+      },
+      "agent": "atlas",
+      "task_sessions": {}
     }
-  }
+  },
+  "active_plan": "/Users/nick/workspace/ouroboros/.omo/plans/repo-root-relative-paths.md",
+  "started_at": "2026-08-01T18:52:02.960Z",
+  "status": "active",
+  "updated_at": "2026-08-01T18:52:02.960Z",
+  "session_ids": [
+    "opencode:ses_041caea41ffecSjOHSWmclsp1t"
+  ],
+  "session_origins": {
+    "opencode:ses_041caea41ffecSjOHSWmclsp1t": "direct"
+  },
+  "plan_name": "repo-root-relative-paths",
+  "task_sessions": {},
+  "agent": "atlas"
 }

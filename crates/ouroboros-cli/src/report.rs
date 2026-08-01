@@ -56,9 +56,9 @@ pub fn load_json_report(path: &Path) -> Result<JsonReport, String> {
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     let report: JsonReport =
         serde_json::from_str(&contents).map_err(|e| format!("failed to parse JSON report: {e}"))?;
-    if report.version != 1 {
+    if report.version != 2 {
         return Err(format!(
-            "unsupported report version: {} (expected 1)",
+            "unsupported report version: {} (expected 2; regenerate with oboros 0.6.0)",
             report.version
         ));
     }
@@ -1439,18 +1439,21 @@ mod tests {
         let dir = std::env::temp_dir();
         let path = dir.join("oboros_test_wrongver.json");
         let json =
-            r#"{"version":99,"summary":{"cycles_reported":0,"cycles_suppressed":0},"cycles":[]}"#;
+            r#"{"version":1,"summary":{"cycles_reported":0,"cycles_suppressed":0},"cycles":[]}"#;
         std::fs::write(&path, json).unwrap();
         let result = load_json_report(&path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("unsupported report version"));
+        assert_eq!(
+            result.unwrap_err(),
+            "unsupported report version: 1 (expected 2; regenerate with oboros 0.6.0)"
+        );
     }
 
     #[test]
     fn load_mismatched_cycle_count_returns_error() {
         let dir = std::env::temp_dir();
         let path = dir.join("oboros_test_bad_count.json");
-        let json = r#"{"version":1,"summary":{"cycles_reported":2,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
+        let json = r#"{"version":2,"summary":{"cycles_reported":2,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
         std::fs::write(&path, json).unwrap();
         let result = load_json_report(&path);
         assert!(result.is_err());
@@ -1461,7 +1464,7 @@ mod tests {
     fn load_mismatched_cycle_size_returns_error() {
         let dir = std::env::temp_dir();
         let path = dir.join("oboros_test_bad_size.json");
-        let json = r#"{"version":1,"summary":{"cycles_reported":1,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":3,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
+        let json = r#"{"version":2,"summary":{"cycles_reported":1,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":3,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
         std::fs::write(&path, json).unwrap();
         let result = load_json_report(&path);
         assert!(result.is_err());
@@ -1472,7 +1475,7 @@ mod tests {
     fn load_non_sequential_cycle_index_returns_error() {
         let dir = std::env::temp_dir();
         let path = dir.join("oboros_test_bad_index.json");
-        let json = r#"{"version":1,"summary":{"cycles_reported":1,"cycles_suppressed":0},"cycles":[{"index":7,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
+        let json = r#"{"version":2,"summary":{"cycles_reported":1,"cycles_suppressed":0},"cycles":[{"index":7,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
         std::fs::write(&path, json).unwrap();
         let result = load_json_report(&path);
         assert!(result.is_err());
@@ -1483,12 +1486,12 @@ mod tests {
     fn load_valid_json() {
         let dir = std::env::temp_dir();
         let path = dir.join("oboros_test_valid.json");
-        let json = r#"{"version":1,"summary":{"cycles_reported":1,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
+        let json = r#"{"version":2,"summary":{"cycles_reported":1,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
         std::fs::write(&path, json).unwrap();
         let result = load_json_report(&path);
         assert!(result.is_ok());
         let report = result.unwrap();
-        assert_eq!(report.version, 1);
+        assert_eq!(report.version, 2);
         assert_eq!(report.summary.cycles_reported, 1);
         assert_eq!(report.cycles.len(), 1);
         assert_eq!(report.cycles[0].packages, vec!["auth"]);

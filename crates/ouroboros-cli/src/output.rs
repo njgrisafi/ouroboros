@@ -105,7 +105,7 @@ pub fn build_dump_cyclic_files_report(
     ignore_derived_ancestor_init: bool,
 ) -> JsonCyclicFilesReport {
     JsonCyclicFilesReport {
-        version: 1,
+        version: 2,
         ignore_derived_ancestor_init,
         cyclic_files: cyclic_files
             .iter()
@@ -241,7 +241,7 @@ pub fn build_json_report(
         .collect();
 
     JsonReport {
-        version: 1,
+        version: 2,
         summary: JsonSummary {
             cycles_reported: kept_cycles.len(),
             cycles_suppressed: suppressed_count,
@@ -457,7 +457,7 @@ pub fn build_dump_ignores_report(cycles: &[Vec<PathBuf>]) -> JsonDumpIgnoresRepo
         .collect();
 
     JsonDumpIgnoresReport {
-        version: 1,
+        version: 2,
         ignore_entries,
     }
 }
@@ -493,14 +493,14 @@ mod tests {
             },
         );
 
-        assert_eq!(report.version, 1);
+        assert_eq!(report.version, 2);
         assert_eq!(report.summary.cycles_reported, 0);
         assert_eq!(report.summary.cycles_suppressed, 0);
         assert!(report.cycles.is_empty());
 
         let json = serde_json::to_string_pretty(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["version"], 1);
+        assert_eq!(parsed["version"], 2);
     }
 
     #[test]
@@ -648,9 +648,46 @@ mod tests {
         let json = serde_json::to_string_pretty(&report).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(parsed["version"], 1);
+        assert_eq!(parsed["version"], 2);
         assert_eq!(parsed["cycles"][0]["files"][0]["path"], "a.py");
         assert_eq!(parsed["cycles"][0]["files"][0]["import_lines"][0], 7);
+    }
+
+    #[test]
+    fn json_report_serializes_schema_version_2() {
+        let edge_metadata = make_edge_metadata(&[]);
+        let report = build_json_report(
+            &[],
+            0,
+            &edge_metadata,
+            JsonReportInput {
+                traced: vec![],
+                unknown_paths: vec![],
+                excluded: vec![],
+                cyclic_files: vec![],
+                source_roots: &[],
+            },
+        );
+
+        let parsed: serde_json::Value = serde_json::to_value(&report).unwrap();
+        assert_eq!(parsed["version"], 2);
+    }
+
+    #[test]
+    fn dump_ignores_report_serializes_schema_version_2() {
+        let report =
+            build_dump_ignores_report(&[vec![PathBuf::from("a.py"), PathBuf::from("b.py")]]);
+
+        let parsed: serde_json::Value = serde_json::to_value(&report).unwrap();
+        assert_eq!(parsed["version"], 2);
+    }
+
+    #[test]
+    fn dump_cyclic_files_report_serializes_schema_version_2() {
+        let report = build_dump_cyclic_files_report(&[PathBuf::from("a.py")], false);
+
+        let parsed: serde_json::Value = serde_json::to_value(&report).unwrap();
+        assert_eq!(parsed["version"], 2);
     }
 
     #[test]
@@ -661,7 +698,7 @@ mod tests {
         ];
         let report = build_dump_ignores_report(&cycles);
 
-        assert_eq!(report.version, 1);
+        assert_eq!(report.version, 2);
         assert_eq!(report.ignore_entries.len(), 2);
         assert_eq!(report.ignore_entries[0].files, vec!["a.py", "b.py"]);
         assert_eq!(report.ignore_entries[1].files, vec!["x.py", "y.py"]);
