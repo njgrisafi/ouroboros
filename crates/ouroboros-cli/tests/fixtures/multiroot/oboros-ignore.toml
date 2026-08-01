@@ -1,0 +1,5 @@
+source-roots = ["src", "lib"]
+
+[[cycles.ignore]]
+files = ["src/pkg/a.py", "src/pkg/b.py"]
+reason = "known multiroot pkg cycle, project-root-relative paths"
