@@ -282,10 +282,18 @@ fn main() {
     ));
     if verbose {
         println!("\n--- imports ---");
+        println!("project root: {}", project_root.display());
     }
     for root in &discovery_result.roots {
+        if verbose {
+            println!(
+                "source root: {} ({} files)",
+                root.path.display(),
+                root.files.len()
+            );
+        }
         for file in &root.files {
-            let abs_path = root.path.join(&file.rel_path);
+            let abs_path = project_root.join(&file.rel_path);
             let source = match std::fs::read_to_string(&abs_path) {
                 Ok(s) => s,
                 Err(e) => {
@@ -326,7 +334,7 @@ fn main() {
     // Build first-party module index and resolve imports.
     spinner.set_message("Resolving imports...");
     let index = resolver::ModuleIndex::from_discovery(&discovery_result);
-    let resolve_result = resolver::resolve_all(&discovery_result, &index, &config);
+    let resolve_result = resolver::resolve_all(&discovery_result, &index, &config, &project_root);
 
     if verbose {
         println!(
@@ -415,7 +423,8 @@ fn main() {
         // Reuses the same index (edge-independent) and excluded set (path-keyed).
         let mut direct_config = config.clone();
         direct_config.resolve.include_ancestor_init = false;
-        let direct_resolve = resolver::resolve_all(&discovery_result, &index, &direct_config);
+        let direct_resolve =
+            resolver::resolve_all(&discovery_result, &index, &direct_config, &project_root);
         let direct_graph = graph::build_file_dependency_graph(&discovery_result, &direct_resolve);
         let direct_effective = if excluded.is_empty() {
             direct_graph.graph
