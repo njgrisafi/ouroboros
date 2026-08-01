@@ -147,6 +147,8 @@ impl Config {
 
     /// Validate the config after deserialization.
     fn validate(&self) -> Result<(), ConfigError> {
+        self.validate_source_roots()?;
+
         if self.cycles.min_scc_size < 1 {
             return Err(ConfigError::Validation(
                 "min-scc-size must be at least 1".to_string(),
@@ -221,6 +223,55 @@ impl Config {
                 return Err(ConfigError::Validation(format!(
                     "exclude entry must be a relative path, got absolute: {entry}"
                 )));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Reject overlapping, nested, or duplicate source roots.
+    ///
+    /// `""` and `"."` both normalize to the project root, so a `.` root
+    /// conflicts only with another `.`/`""` root — `.` and a named root such
+    /// as `lib` are intentionally treated as non-overlapping.
+    fn validate_source_roots(&self) -> Result<(), ConfigError> {
+        let mut roots: Vec<(String, &str)> = self
+            .source_roots
+            .iter()
+            .map(|r| {
+                let normalized = r.trim().replace('\\', "/");
+                let normalized = normalized.trim_end_matches('/');
+                let normalized = if normalized == "." {
+                    String::new()
+                } else {
+                    normalized.to_string()
+                };
+                (normalized, r.as_str())
+            })
+            .collect();
+        // Sorting by normalized value places any prefix `a` before its
+        // extension `a/b`, so only the earlier element can be a prefix.
+        roots.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for i in 0..roots.len() {
+            for j in (i + 1)..roots.len() {
+                let (a_norm, a_orig) = &roots[i];
+                let (b_norm, b_orig) = &roots[j];
+
+                if a_norm == b_norm {
+                    return Err(ConfigError::Validation(format!(
+                        "source roots must not overlap: duplicate source root '{a_orig}'"
+                    )));
+                }
+
+                // An empty (project-root) `a_norm` yields the prefix "/", which
+                // no normalized root starts with, so `.` never conflicts here.
+                let prefix = format!("{a_norm}/");
+                if b_norm.starts_with(&prefix) {
+                    return Err(ConfigError::Validation(format!(
+                        "source roots must not overlap: '{a_orig}' is a prefix of '{b_orig}'"
+                    )));
+                }
             }
         }
 
@@ -637,5 +688,73 @@ exclude = ["C:/Users/project/app.py"]
     fn default_config_exclude_is_empty() {
         let config = Config::default();
         assert!(config.exclude.is_empty());
+    }
+
+    // --- source-root overlap validation tests ---
+
+    #[test]
+    fn source_roots_nested_is_error() {
+        let toml_str = r#"source-roots = ["src", "src/pkg"]"#;
+        let result = Config::from_toml(toml_str);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("prefix") && msg.contains("src"),
+            "expected prefix-overlap message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn source_roots_duplicate_is_error() {
+        let toml_str = r#"source-roots = ["src", "src"]"#;
+        let result = Config::from_toml(toml_str);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("duplicate"),
+            "expected duplicate message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn source_roots_disjoint_is_ok() {
+        let toml_str = r#"source-roots = ["src", "lib"]"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert_eq!(
+            config.source_roots,
+            vec!["src".to_string(), "lib".to_string()]
+        );
+    }
+
+    #[test]
+    fn source_roots_dot_and_named_is_ok() {
+        let toml_str = r#"source-roots = [".", "lib"]"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert_eq!(
+            config.source_roots,
+            vec![".".to_string(), "lib".to_string()]
+        );
+    }
+
+    #[test]
+    fn source_roots_duplicate_dot_is_error() {
+        let toml_str = r#"source-roots = [".", "."]"#;
+        let result = Config::from_toml(toml_str);
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("duplicate"),
+            "expected duplicate message, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn source_roots_trailing_slash_treated_as_overlap() {
+        let toml_str = r#"source-roots = ["src/", "src"]"#;
+        let result = Config::from_toml(toml_str);
+        assert!(
+            result.is_err(),
+            "trailing slash should normalize to a duplicate"
+        );
     }
 }
