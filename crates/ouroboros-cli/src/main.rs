@@ -450,7 +450,7 @@ fn main() {
     }
 
     let cycles = if cli.package {
-        cycles::filter_cycles_by_package(filter_result.kept)
+        cycles::filter_cycles_by_package(filter_result.kept, &config.source_roots)
     } else {
         filter_result.kept
     };
@@ -565,7 +565,7 @@ fn main() {
                 println!("(filtered to intra-package cycles)");
             }
 
-            let cycle_data = output::order_cycles(&cycles);
+            let cycle_data = output::order_cycles(&cycles, &config.source_roots);
 
             let mut current_packages: Option<&Vec<String>> = None;
             let mut group_count = 0;
@@ -710,16 +710,19 @@ fn main() {
                 &cycles,
                 suppressed_count,
                 &graph_result.edge_metadata,
-                traced,
-                unknown_paths,
-                applied_exclude_patterns,
-                if cli.show_cyclic_files {
-                    cyclic_files
-                        .iter()
-                        .map(|p| p.display().to_string().replace('\\', "/"))
-                        .collect()
-                } else {
-                    vec![]
+                output::JsonReportInput {
+                    traced,
+                    unknown_paths,
+                    excluded: applied_exclude_patterns,
+                    cyclic_files: if cli.show_cyclic_files {
+                        cyclic_files
+                            .iter()
+                            .map(|p| p.display().to_string().replace('\\', "/"))
+                            .collect()
+                    } else {
+                        vec![]
+                    },
+                    source_roots: &config.source_roots,
                 },
             );
             println!("{}", serde_json::to_string_pretty(&report).unwrap());

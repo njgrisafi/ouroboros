@@ -1,9 +1,8 @@
 use std::collections::HashSet;
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use crate::config::{CyclesConfig, IgnoredCycle};
-use crate::graph::FileCycle;
+use crate::graph::{FileCycle, strip_source_root_prefix};
 
 /// Filter cycles (SCCs) by size using the given configuration.
 ///
@@ -56,26 +55,30 @@ pub fn filter_ignored_cycles(cycles: Vec<FileCycle>, ignored: &[IgnoredCycle]) -
     FilterResult { kept, suppressed }
 }
 
-fn package_of(path: &Path) -> Option<&OsStr> {
-    let mut components = path.components();
+fn package_of_stripped(path: &Path, source_roots: &[String]) -> Option<PathBuf> {
+    let stripped = strip_source_root_prefix(path, source_roots);
+    let mut components = stripped.components();
     let first = components.next()?;
     if components.next().is_some() {
-        Some(first.as_os_str())
+        Some(PathBuf::from(first.as_os_str()))
     } else {
         None
     }
 }
 
-pub fn filter_cycles_by_package(cycles: Vec<FileCycle>) -> Vec<FileCycle> {
+pub fn filter_cycles_by_package(cycles: Vec<FileCycle>, source_roots: &[String]) -> Vec<FileCycle> {
     cycles
         .into_iter()
         .filter(|cycle| {
             let mut iter = cycle.iter();
-            let first_pkg = match iter.next().and_then(|p| package_of(p)) {
+            let first_pkg = match iter
+                .next()
+                .and_then(|p| package_of_stripped(p, source_roots))
+            {
                 Some(pkg) => pkg,
                 None => return false,
             };
-            iter.all(|p| package_of(p) == Some(first_pkg))
+            iter.all(|p| package_of_stripped(p, source_roots) == Some(first_pkg.clone()))
         })
         .collect()
 }
@@ -85,7 +88,6 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// Helper: create a cycle of `n` dummy files.
     fn make_cycle(n: usize) -> FileCycle {
         (0..n)
             .map(|i| PathBuf::from(format!("file_{i}.py")))
@@ -227,37 +229,19 @@ mod tests {
     }
 
     #[test]
-    fn package_of_nested_file() {
-        assert_eq!(package_of(Path::new("pkg/a.py")), Some(OsStr::new("pkg")));
-    }
-
-    #[test]
-    fn package_of_deeply_nested() {
-        assert_eq!(
-            package_of(Path::new("pkg/sub/deep/a.py")),
-            Some(OsStr::new("pkg"))
-        );
-    }
-
-    #[test]
-    fn package_of_root_level() {
-        assert_eq!(package_of(Path::new("root.py")), None);
-    }
-
-    #[test]
     fn package_filter_single_package_kept() {
         let cycles = vec![
             vec![PathBuf::from("pkg/a.py"), PathBuf::from("pkg/b.py")],
             vec![PathBuf::from("other/x.py"), PathBuf::from("other/y.py")],
         ];
-        let result = filter_cycles_by_package(cycles);
+        let result = filter_cycles_by_package(cycles, &[]);
         assert_eq!(result.len(), 2);
     }
 
     #[test]
     fn package_filter_cross_package_excluded() {
         let cycles = vec![vec![PathBuf::from("pkg1/a.py"), PathBuf::from("pkg2/b.py")]];
-        let result = filter_cycles_by_package(cycles);
+        let result = filter_cycles_by_package(cycles, &[]);
         assert!(result.is_empty());
     }
 
@@ -268,7 +252,7 @@ mod tests {
             vec![PathBuf::from("pkg1/a.py"), PathBuf::from("pkg2/b.py")],
             vec![PathBuf::from("other/x.py"), PathBuf::from("other/y.py")],
         ];
-        let result = filter_cycles_by_package(cycles);
+        let result = filter_cycles_by_package(cycles, &[]);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0][0], PathBuf::from("pkg/a.py"));
         assert_eq!(result[1][0], PathBuf::from("other/x.py"));
@@ -280,28 +264,28 @@ mod tests {
             PathBuf::from("pkg/sub/a.py"),
             PathBuf::from("pkg/other/b.py"),
         ]];
-        let result = filter_cycles_by_package(cycles);
+        let result = filter_cycles_by_package(cycles, &[]);
         assert_eq!(result.len(), 1);
     }
 
     #[test]
     fn package_filter_root_level_files_excluded() {
         let cycles = vec![vec![PathBuf::from("root.py"), PathBuf::from("pkg/a.py")]];
-        let result = filter_cycles_by_package(cycles);
+        let result = filter_cycles_by_package(cycles, &[]);
         assert!(result.is_empty());
     }
 
     #[test]
     fn package_filter_all_root_level_excluded() {
         let cycles = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
-        let result = filter_cycles_by_package(cycles);
+        let result = filter_cycles_by_package(cycles, &[]);
         assert!(result.is_empty());
     }
 
     #[test]
     fn package_filter_empty_cycles() {
         let cycles: Vec<FileCycle> = vec![];
-        let result = filter_cycles_by_package(cycles);
+        let result = filter_cycles_by_package(cycles, &[]);
         assert!(result.is_empty());
     }
 
@@ -311,7 +295,7 @@ mod tests {
             PathBuf::from("pkg/a.py"),
             PathBuf::from("pkg_other/b.py"),
         ]];
-        let result = filter_cycles_by_package(cycles);
+        let result = filter_cycles_by_package(cycles, &[]);
         assert!(result.is_empty());
     }
 
@@ -322,7 +306,7 @@ mod tests {
             PathBuf::from("pkg/b.py"),
             PathBuf::from("pkg/c.py"),
         ]];
-        let result = filter_cycles_by_package(cycles);
+        let result = filter_cycles_by_package(cycles, &[]);
         assert_eq!(result.len(), 1);
     }
 
@@ -333,7 +317,31 @@ mod tests {
             PathBuf::from("pkg/b.py"),
             PathBuf::from("other/c.py"),
         ]];
-        let result = filter_cycles_by_package(cycles);
+        let result = filter_cycles_by_package(cycles, &[]);
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn package_filter_strips_source_root_before_grouping() {
+        let cycles = vec![vec![
+            PathBuf::from("src/pkg/a.py"),
+            PathBuf::from("src/pkg/b.py"),
+        ]];
+        let result = filter_cycles_by_package(cycles, &["src".to_string()]);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn package_filter_no_strip_without_source_roots() {
+        let cycles = vec![vec![
+            PathBuf::from("src/pkg/a.py"),
+            PathBuf::from("src/pkg/b.py"),
+        ]];
+        let result = filter_cycles_by_package(cycles, &[]);
+        assert_eq!(
+            result.len(),
+            1,
+            "src is the grouping component without stripping"
+        );
     }
 }

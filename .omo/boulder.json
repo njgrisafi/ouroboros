@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "active_work_id": "repo-root-relative-paths",
+  "works": {
+    "repo-root-relative-paths": {
+      "work_id": "repo-root-relative-paths",
+      "active_plan": ".omo/plans/repo-root-relative-paths.md",
+      "plan_name": "repo-root-relative-paths",
+      "session_ids": ["codex:current"],
+      "status": "active",
+      "worktree_path": null
+    }
+  }
+}
