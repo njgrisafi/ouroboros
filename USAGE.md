@@ -165,6 +165,36 @@ oboros --dump-ignores
 oboros --dump-ignores --format json
 ```
 
+#### `[cycles] ignore-dirs`
+
+Suppress cycles that are entirely contained within specified directories. A cycle is dropped if every file in it is under one of the ignored directories; cycles with any file outside the ignored dirs are still reported.
+
+```toml
+[cycles]
+ignore-dirs = ["app/protos/", "app/migrations/"]
+```
+
+**Semantics:**
+
+- **Entries are project-root-relative** (same form as `exclude`, e.g. `["app/protos/", "app/migrations/"]`). Matching mirrors `exclude`: an entry matches a file exactly or matches any file under it as a directory prefix.
+- **A cycle is dropped entirely if every one of its files is under one of the ignored directories.** A cycle with any file outside the ignored dirs is still reported. This is the key difference from `exclude`: real cycles that cross from your code into generated directories are preserved.
+- **Dropped cycles are removed everywhere:** not shown in human or JSON output, do not trigger `--strict`, and are excluded from `--dump-cyclic-files` / `--check-cyclic-files` / the `cyclic_files` set.
+
+**Contrast with neighbors:**
+
+- `exclude` = removes files from the analysis seed set (mypy-style); excluded files still get reported if a non-excluded file imports them, so `exclude` cannot hide a generated-internal cycle that your code reaches.
+- `[[cycles.ignore]]` = suppresses one exact set of files (must match the cycle exactly).
+- `ignore-dirs` = suppresses any cycle contained within the named directories, no need to enumerate file sets.
+
+**Common use case:** generated code you don't own (betterproto stubs, database migrations, etc.):
+
+```toml
+[cycles]
+ignore-dirs = ["app/protos/", "app/migrations/"]
+```
+
+**Validation:** entries must be relative (absolute paths and empty strings are rejected), consistent with `exclude`.
+
 #### `[cycles] known-cyclic-files`
 
 A sorted list of first-party files known to participate in an import cycle. Used with `--check-cyclic-files` to grandfather currently-cyclic files and block new ones from being introduced.

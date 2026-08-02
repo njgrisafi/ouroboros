@@ -22,6 +22,7 @@ Designed for large monorepos with millions of lines of code.
 - Track known cyclic files (`[cycles] known-cyclic-files`) to grandfather current cycles and block new ones; generate with `--dump-cyclic-files`, gate CI with `--check-cyclic-files`
 - `--strict` mode for CI enforcement (exit code 1 on cycles)
 - `--package` flag to filter to intra-package cycles only
+- Ignore cycles contained within generated directories (`[cycles] ignore-dirs`)
 - Exclude paths from analysis seeds (`exclude` in config / `--exclude` flag); files reachable via imports from non-excluded paths are still reported
 
 See [USAGE.md](USAGE.md) for full details on every flag and config option.
