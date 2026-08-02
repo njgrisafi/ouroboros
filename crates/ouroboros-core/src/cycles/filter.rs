@@ -83,6 +83,60 @@ pub fn filter_cycles_by_package(cycles: Vec<FileCycle>, source_roots: &[String])
         .collect()
 }
 
+fn path_under_dir(file: &Path, dir_normalized: &str) -> bool {
+    let file_str = file.to_string_lossy().replace('\\', "/");
+    file_str == dir_normalized || file_str.starts_with(&format!("{dir_normalized}/"))
+}
+
+/// Partition cycles into `(kept, ignored)` by directory scope.
+///
+/// A cycle is `ignored` iff every file in it lives under at least one of the
+/// (normalized) `ignore_dirs`. Directory entries are normalized once: `\` is
+/// mapped to `/`, a leading `./` and trailing `/` are stripped, and entries
+/// that normalize to empty or `.` are skipped. When no usable directory
+/// remains the input is returned unchanged as `(cycles, vec![])`. Input order
+/// is preserved in `kept`.
+pub fn partition_dir_ignored(
+    cycles: Vec<FileCycle>,
+    ignore_dirs: &[String],
+) -> (Vec<FileCycle>, Vec<FileCycle>) {
+    let normalized_dirs: Vec<String> = ignore_dirs
+        .iter()
+        .filter_map(|dir| {
+            let replaced = dir.replace('\\', "/");
+            let trimmed = replaced
+                .strip_prefix("./")
+                .unwrap_or(&replaced)
+                .trim_end_matches('/');
+            if trimmed.is_empty() || trimmed == "." {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .collect();
+
+    if normalized_dirs.is_empty() {
+        return (cycles, Vec::new());
+    }
+
+    let mut kept = Vec::new();
+    let mut ignored = Vec::new();
+
+    for cycle in cycles {
+        let all_under = cycle
+            .iter()
+            .all(|file| normalized_dirs.iter().any(|dir| path_under_dir(file, dir)));
+        if all_under {
+            ignored.push(cycle);
+        } else {
+            kept.push(cycle);
+        }
+    }
+
+    (kept, ignored)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,6 +157,7 @@ mod tests {
             ignore: vec![],
             known_cyclic_files: vec![],
             ignore_derived_ancestor_init: false,
+            ignore_dirs: vec![],
         };
         let result = filter_cycles_by_size(cycles, &config);
         assert_eq!(result.len(), 1);
@@ -118,6 +173,7 @@ mod tests {
             ignore: vec![],
             known_cyclic_files: vec![],
             ignore_derived_ancestor_init: false,
+            ignore_dirs: vec![],
         };
         let result = filter_cycles_by_size(cycles, &config);
         assert_eq!(result.len(), 2);
@@ -134,6 +190,7 @@ mod tests {
             ignore: vec![],
             known_cyclic_files: vec![],
             ignore_derived_ancestor_init: false,
+            ignore_dirs: vec![],
         };
         let result = filter_cycles_by_size(cycles, &config);
         assert_eq!(result.len(), 2);
@@ -158,6 +215,7 @@ mod tests {
             ignore: vec![],
             known_cyclic_files: vec![],
             ignore_derived_ancestor_init: false,
+            ignore_dirs: vec![],
         };
         let result = filter_cycles_by_size(cycles, &config);
         assert!(result.is_empty());
@@ -343,5 +401,81 @@ mod tests {
             1,
             "src is the grouping component without stripping"
         );
+    }
+
+    fn cyc(files: &[&str]) -> FileCycle {
+        files.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn partition_dir_ignored_fully_inside_is_ignored() {
+        let cycles = vec![cyc(&["app/protos/a.py", "app/protos/b.py"])];
+        let (kept, ignored) = partition_dir_ignored(cycles, &["app/protos/".to_string()]);
+        assert!(kept.is_empty());
+        assert_eq!(ignored.len(), 1);
+    }
+
+    #[test]
+    fn partition_dir_ignored_cross_boundary_is_kept() {
+        let cycles = vec![cyc(&["app/protos/a.py", "app/foo.py"])];
+        let (kept, ignored) = partition_dir_ignored(cycles, &["app/protos/".to_string()]);
+        assert_eq!(kept.len(), 1);
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn partition_dir_ignored_union_across_two_dirs() {
+        let cycles = vec![cyc(&["app/protos/a.py", "app/migrations/m.py"])];
+        let dirs = vec!["app/protos/".to_string(), "app/migrations/".to_string()];
+        let (kept, ignored) = partition_dir_ignored(cycles, &dirs);
+        assert!(kept.is_empty());
+        assert_eq!(ignored.len(), 1);
+    }
+
+    #[test]
+    fn partition_dir_ignored_exact_file_entry() {
+        let cycles = vec![cyc(&["app/protos/a.py", "app/protos/b.py"])];
+        let dirs = vec!["app/protos/a.py".to_string(), "app/protos/b.py".to_string()];
+        let (kept, ignored) = partition_dir_ignored(cycles, &dirs);
+        assert!(kept.is_empty());
+        assert_eq!(ignored.len(), 1);
+    }
+
+    #[test]
+    fn partition_dir_ignored_empty_dirs_is_noop() {
+        let cycles = vec![
+            cyc(&["app/protos/a.py", "app/protos/b.py"]),
+            cyc(&["app/foo.py", "app/bar.py"]),
+        ];
+        let (kept, ignored) = partition_dir_ignored(cycles, &[]);
+        assert_eq!(kept.len(), 2);
+        assert!(ignored.is_empty());
+    }
+
+    #[test]
+    fn partition_dir_ignored_preserves_kept_order() {
+        let cycles = vec![
+            cyc(&["app/protos/a.py", "app/protos/b.py"]),
+            cyc(&["app/foo.py", "app/bar.py"]),
+            cyc(&["app/baz.py", "app/qux.py"]),
+        ];
+        let (kept, ignored) = partition_dir_ignored(cycles, &["app/protos/".to_string()]);
+        assert_eq!(kept.len(), 2);
+        assert_eq!(kept[0][0], PathBuf::from("app/foo.py"));
+        assert_eq!(kept[1][0], PathBuf::from("app/baz.py"));
+        assert_eq!(ignored.len(), 1);
+    }
+
+    #[test]
+    fn path_under_dir_prefix_boundary() {
+        assert!(!path_under_dir(
+            &PathBuf::from("app/protosX/a.py"),
+            "app/protos"
+        ));
+        assert!(path_under_dir(&PathBuf::from("app/protos"), "app/protos"));
+        assert!(path_under_dir(
+            &PathBuf::from("app/protos/a.py"),
+            "app/protos"
+        ));
     }
 }
