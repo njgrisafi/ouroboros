@@ -177,6 +177,7 @@ ignore-dirs = ["app/protos/", "app/migrations/"]
 **Semantics:**
 
 - **Entries are project-root-relative** (same form as `exclude`, e.g. `["app/protos/", "app/migrations/"]`). Matching mirrors `exclude`: an entry matches a file exactly or matches any file under it as a directory prefix.
+- **The decision is based purely on cycle membership, not on who imports the cycle:** if every file in a detected cycle is under one of the ignored directories, the whole cycle is dropped — even if non-ignored code imports into it. This is the opposite of `exclude`, which keys off import reachability from seeds.
 - **A cycle is dropped entirely if every one of its files is under one of the ignored directories.** A cycle with any file outside the ignored dirs is still reported. This is the key difference from `exclude`: real cycles that cross from your code into generated directories are preserved.
 - **Dropped cycles are removed everywhere:** not shown in human or JSON output, do not trigger `--strict`, and are excluded from `--dump-cyclic-files` / `--check-cyclic-files` / the `cyclic_files` set.
 
@@ -185,6 +186,45 @@ ignore-dirs = ["app/protos/", "app/migrations/"]
 - `exclude` = removes files from the analysis seed set (mypy-style); excluded files still get reported if a non-excluded file imports them, so `exclude` cannot hide a generated-internal cycle that your code reaches.
 - `[[cycles.ignore]]` = suppresses one exact set of files (must match the cycle exactly).
 - `ignore-dirs` = suppresses any cycle contained within the named directories, no need to enumerate file sets.
+
+**Worked examples:**
+
+*Example 1: cycle fully inside an ignored directory (suppressed)*
+
+Config:
+```toml
+source-roots = ["app"]
+
+[cycles]
+ignore-dirs = ["app/protos/"]
+```
+
+Topology: two generated protobuf stubs import each other:
+```
+app/protos/scheduling/common/v1/__init__.py ⇄ app/protos/scheduling/v1/__init__.py
+```
+
+Both files are under `app/protos/`, so the entire cycle is dropped. Even though your application code imports `protos.scheduling.v1`, the cycle is removed from the report, from `--strict`, and from `--dump-cyclic-files`. Human output shows:
+```
+--- dependency cycles (0) ---
+(1 cycles ignored by ignore-dirs)
+```
+
+*Example 2: cross-boundary cycle (still reported)*
+
+Same config (`ignore-dirs = ["app/protos/"]`). Now a cycle routes through your own code:
+```
+app/services/a.py → app/protos/gen/x.py → app/services/b.py → app/services/a.py
+```
+
+This strongly connected component contains `app/services/a.py` and `app/services/b.py`, which are outside `app/protos/`. Because not every member is under an ignored directory, the cycle is still reported. `ignore-dirs` only hides cycles that are entirely generated-internal; it never hides real cycles that involve your hand-written code. Human output shows:
+```
+--- dependency cycles (1) ---
+cycle 1 (3 files)
+  app/services/a.py (import at line 5)
+  app/protos/gen/x.py (import at line 12)
+  app/services/b.py (import at line 8)
+```
 
 **Common use case:** generated code you don't own (betterproto stubs, database migrations, etc.):
 
@@ -334,6 +374,8 @@ oboros --exclude extra_dir/
 - **Excluded files that are reachable via imports from a non-excluded file are still reported.** This is the key behavior: `exclude` only removes files from the *seed* set, not from the analysis entirely.
 - **Excluded files that nothing non-excluded imports are dropped.** For example, a `tests/` directory that imports app code but is not imported by app code will be dropped entirely — it is not reachable from any non-excluded seed.
 - **Excluding one member of a mutual cycle with a non-excluded file does NOT hide the cycle.** Both files are mutually reachable, so both are retained.
+
+> **Want to hide cycles inside a directory (e.g. generated code)?** `exclude` won't do that — it only trims analysis seeds, so a generated-internal cycle that your code imports is still reported. Use [`[cycles] ignore-dirs`](#cycles-ignore-dirs) instead, which drops any cycle whose files are all under the named directories.
 
 #### Example: excluding a test directory
 
