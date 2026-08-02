@@ -510,7 +510,8 @@ fn main() {
     } else {
         filter_result.kept
     };
-    let suppressed_count = filter_result.suppressed.len() + dir_ignored_cycles.len();
+    let ignore_list_suppressed = filter_result.suppressed.len();
+    let suppressed_count = ignore_list_suppressed + dir_ignored_cycles.len();
 
     spinner.finish_and_clear();
 
@@ -626,8 +627,11 @@ fn main() {
     match cli.format {
         OutputFormat::Human => {
             println!("\n--- dependency cycles ({}) ---", cycles.len());
-            if suppressed_count > 0 {
-                println!("({} cycles suppressed by ignore list)", suppressed_count);
+            if ignore_list_suppressed > 0 {
+                println!(
+                    "({} cycles suppressed by ignore list)",
+                    ignore_list_suppressed
+                );
             }
             if !dir_ignored_cycles.is_empty() {
                 println!(

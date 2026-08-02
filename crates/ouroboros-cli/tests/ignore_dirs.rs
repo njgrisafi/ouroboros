@@ -128,6 +128,29 @@ fn strict_exits_zero_when_only_intra_dir_cycles() {
     );
 }
 
+#[test]
+fn human_output_reports_dir_ignored_cycles_without_ignore_list_suppressions() {
+    // Given a project whose sole cycle is fully under an ignore-dirs entry,
+    // When we render the human report, Then it reports ignore-dirs and does
+    // not claim any [[cycles.ignore]] suppression.
+    let cfg = fixture("ignore_dirs_strict", "oboros.toml");
+    let output = run_raw(&["--config", cfg.to_str().unwrap()]);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        output.status.success(),
+        "human report should succeed for dir-ignored-only fixture\nstdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("ignored by ignore-dirs"),
+        "human report must mention ignore-dirs suppression\nstdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("suppressed by ignore list"),
+        "human report must not claim ignore-list suppression when only ignore-dirs matched\nstdout: {stdout}"
+    );
+}
+
 // ── (d) --dump-cyclic-files omits the suppressed intra-dir files ──────────────
 
 #[test]
