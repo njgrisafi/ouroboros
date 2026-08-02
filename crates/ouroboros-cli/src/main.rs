@@ -418,6 +418,10 @@ fn main() {
     spinner.set_message("Detecting cycles...");
     let all_cycles = graph::dependency_cycles(&effective_graph);
     let size_filtered = cycles::filter_cycles_by_size(all_cycles, &config.cycles);
+    // Rebind `size_filtered` to the kept partition so every downstream consumer
+    // (report, --strict, cyclic-files baseline) sees only non-dir-ignored cycles.
+    let (size_filtered, dir_ignored_cycles) =
+        cycles::partition_dir_ignored(size_filtered, &config.cycles.ignore_dirs);
 
     let cyclic_surface_active =
         cli.dump_cyclic_files || cli.check_cyclic_files || cli.show_cyclic_files;
@@ -451,7 +455,9 @@ fn main() {
         };
         let direct_cycles = graph::dependency_cycles(&direct_effective);
         let direct_size_filtered = cycles::filter_cycles_by_size(direct_cycles, &config.cycles);
-        cycles::collect_cyclic_files(&direct_size_filtered)
+        let direct_kept =
+            cycles::partition_dir_ignored(direct_size_filtered, &config.cycles.ignore_dirs).0;
+        cycles::collect_cyclic_files(&direct_kept)
     } else {
         cycles::collect_cyclic_files(&size_filtered)
     };
@@ -504,7 +510,7 @@ fn main() {
     } else {
         filter_result.kept
     };
-    let suppressed_count = filter_result.suppressed.len();
+    let suppressed_count = filter_result.suppressed.len() + dir_ignored_cycles.len();
 
     spinner.finish_and_clear();
 
@@ -622,6 +628,12 @@ fn main() {
             println!("\n--- dependency cycles ({}) ---", cycles.len());
             if suppressed_count > 0 {
                 println!("({} cycles suppressed by ignore list)", suppressed_count);
+            }
+            if !dir_ignored_cycles.is_empty() {
+                println!(
+                    "({} cycles ignored by ignore-dirs)",
+                    dir_ignored_cycles.len()
+                );
             }
             if cli.package {
                 println!("(filtered to intra-package cycles)");
