@@ -5,7 +5,7 @@
 The binary is called `oboros`. Usage:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--strict] [--no-include-ancestor-init] [--exclude <PATH>]
+oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--strict] [--no-include-ancestor-init] [--exclude <PATH>] [--write]
 ```
 
 | Flag | Description |
@@ -13,8 +13,8 @@ oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--d
 | `--config <FILE>` | Path to an `oboros.toml` config file. If omitted, Ouroboros walks upward from the current directory to find one. |
 | `--format <FORMAT>` | Output format: `human` (default) or `json`. When `json`, all verbose intermediate output is suppressed and a single JSON object is emitted to stdout. |
 | `--package` | Only report cycles where all files belong to the same top-level package. Cross-package cycles are excluded. See [Intra-package filtering](#intra-package-filtering---package). |
-| `--dump-ignores` | Print ignore entries for all detected cycles, then exit. With `--format human` (default), prints TOML fragments. With `--format json`, prints a JSON object. |
-| `--dump-cyclic-files` | Print the sorted set of files participating in any cycle as a pasteable TOML fragment (human) or JSON object (`--format json`), then exit. |
+| `--dump-ignores` | Print ignore entries for all detected cycles, then exit. With `--format human` (default), prints TOML fragments. With `--format json`, prints a JSON object. Use with `--write` to patch `oboros.toml` directly. |
+| `--dump-cyclic-files` | Print the sorted set of files participating in any cycle as a pasteable TOML fragment (human) or JSON object (`--format json`), then exit. Use with `--write` to patch `oboros.toml` directly. |
 | `--check-cyclic-files` | Compare `[cycles] known-cyclic-files` in config against the freshly-computed set; exit 0 if identical, exit 1 if any difference (with a human diff on stderr). Independent of `--format`. Short-circuits the normal report. |
 | `--show-cyclic-files` | Include the cyclic-files set as an optional top-level `cyclic_files` array in the JSON report. No-op in human mode. |
 | `--ignore-derived-ancestor-init` | Exclude files that are cyclic only via a derived ancestor-`__init__.py` edge from the known-cyclic-files baseline. Overrides `[cycles] ignore-derived-ancestor-init` in config. Baseline-only; does not affect the normal cycle report. |
@@ -22,6 +22,7 @@ oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--d
 | `--no-include-ancestor-init` | Disable ancestor-package `__init__.py` edges. Overrides `include-ancestor-init` in config. See [`[resolve]` section](#resolve-section). |
 | `--trace <PATH>`, `-t <PATH>` | Report cycles that impact the given file or directory path(s), relative to the project root. Repeatable and/or comma-separated. When omitted, output is identical to today. See [Cycle impact](#cycle-impact---trace). |
 | `--exclude <PATH>` | Exclude paths (files or directories) from analysis seeds. Repeatable and/or comma-separated. Unioned with `exclude` in config. See [Exclude paths](#exclude-paths). |
+| `--write` | Write the dump output directly into `oboros.toml` instead of printing to stdout. Requires `--dump-cyclic-files` or `--dump-ignores`. Patches the file in-place, preserving comments and formatting. Errors (exit 2) if no config file is found. |
 
 If no config file is found, built-in defaults are used (source root: `src`, top-level imports only, minimum SCC size: 2, ancestor `__init__.py` edges enabled).
 
@@ -260,14 +261,15 @@ known-cyclic-files = [
 #### Generating the list
 
 ```bash
-# Print a pasteable TOML fragment (human mode)
-oboros --dump-cyclic-files
+# Write directly into oboros.toml (recommended — preserves comments and formatting)
+oboros --dump-cyclic-files --write
 
-# Print JSON for scripting
-oboros --dump-cyclic-files --format json
+# Or print a pasteable TOML fragment (human mode)
+oboros --dump-cyclic-files
+# Paste the output into [cycles] known-cyclic-files in oboros.toml
 ```
 
-The human output includes a comment and the `[cycles]` header. If you already have a `[cycles]` table, paste only the `known-cyclic-files = [...]` array into it — a blind `>> oboros.toml` redirect is only safe when no prior `[cycles]` table exists.
+The human output includes a comment and the `[cycles]` header. If you already have a `[cycles]` table and prefer not to use `--write`, paste only the `known-cyclic-files = [...]` array into it — a blind `>> oboros.toml` redirect is only safe when no prior `[cycles]` table exists.
 
 #### Checking for changes (`--check-cyclic-files`)
 
@@ -284,7 +286,7 @@ The diff format:
 cyclic files changed:
   + pkg/new.py        (newly cyclic)
   - pkg/old.py        (no longer cyclic)
-run `oboros --dump-cyclic-files` to update [cycles] known-cyclic-files in oboros.toml
+run `oboros --dump-cyclic-files --write` to update [cycles] known-cyclic-files in oboros.toml
 ```
 
 **Semantics:**
@@ -769,6 +771,10 @@ Exit code 1 if any non-suppressed cycles exist. Add `[[cycles.ignore]]` entries 
 ### Bootstrap an ignore list for an existing project
 
 ```bash
+# Write directly into oboros.toml (recommended)
+oboros --dump-ignores --write
+
+# Or append TOML fragments (only safe when no [cycles] table exists yet)
 oboros --dump-ignores >> oboros.toml
 ```
 
