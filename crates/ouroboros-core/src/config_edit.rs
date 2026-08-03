@@ -300,10 +300,19 @@ min-scc-size = 3 # keep this comment
         let mut doc = parse(input);
         set_known_cyclic_files(&mut doc, &strings(&["pkg/a.py"]));
         let out = doc.to_string();
-        assert!(out.contains("# top-level comment"), "lost top comment: {out}");
-        assert!(out.contains("source-roots = [\"src\"]"), "lost roots: {out}");
+        assert!(
+            out.contains("# top-level comment"),
+            "lost top comment: {out}"
+        );
+        assert!(
+            out.contains("source-roots = [\"src\"]"),
+            "lost roots: {out}"
+        );
         assert!(out.contains("min-scc-size = 3"), "lost min-scc-size: {out}");
-        assert!(out.contains("# keep this comment"), "lost inline comment: {out}");
+        assert!(
+            out.contains("# keep this comment"),
+            "lost inline comment: {out}"
+        );
         assert!(out.contains("known-cyclic-files"), "missing new key: {out}");
     }
 
@@ -312,8 +321,14 @@ min-scc-size = 3 # keep this comment
         let mut doc = parse("source-roots = [\"src\"]\n");
         set_known_cyclic_files(&mut doc, &strings(&["pkg\\a.py", "pkg\\sub\\b.py"]));
         let out = doc.to_string();
-        assert!(out.contains("\"pkg/a.py\""), "backslash not normalized: {out}");
-        assert!(out.contains("\"pkg/sub/b.py\""), "backslash not normalized: {out}");
+        assert!(
+            out.contains("\"pkg/a.py\""),
+            "backslash not normalized: {out}"
+        );
+        assert!(
+            out.contains("\"pkg/sub/b.py\""),
+            "backslash not normalized: {out}"
+        );
         assert!(!out.contains('\\'), "backslash remains: {out}");
     }
 
@@ -366,8 +381,14 @@ min-scc-size = 3 # keep this comment
         let mut doc = parse("source-roots = [\"src\"]\n");
         merge_ignored_cycles(&mut doc, &[strings(&["x.py", "y.py"])]);
         let out = doc.to_string();
-        assert!(out.contains("[[cycles.ignore]]"), "missing AoT header: {out}");
-        assert!(out.contains("files = [\"x.py\", \"y.py\"]"), "missing files: {out}");
+        assert!(
+            out.contains("[[cycles.ignore]]"),
+            "missing AoT header: {out}"
+        );
+        assert!(
+            out.contains("files = [\"x.py\", \"y.py\"]"),
+            "missing files: {out}"
+        );
     }
 
     #[test]
@@ -409,7 +430,10 @@ reason = \"legacy debt\"
         let mut doc = parse(input);
         merge_ignored_cycles(&mut doc, &[strings(&["c.py", "d.py"])]);
         let out = doc.to_string();
-        assert!(out.contains("reason = \"legacy debt\""), "reason lost: {out}");
+        assert!(
+            out.contains("reason = \"legacy debt\""),
+            "reason lost: {out}"
+        );
         let cfg = crate::config::Config::from_toml(&out).expect("valid config");
         assert_eq!(cfg.cycles.ignore.len(), 2);
         let with_reason = cfg
@@ -458,7 +482,8 @@ files = [\"a.py\", \"b.py\"]
     #[test]
     fn patch_config_file_change_returns_true_and_writes() {
         let mut file = NamedTempFile::new().expect("temp file");
-        file.write_all(b"source-roots = [\"src\"]\n").expect("write");
+        file.write_all(b"source-roots = [\"src\"]\n")
+            .expect("write");
         let path = file.path().to_path_buf();
 
         let result = patch_config_file(&path, |doc| {
@@ -469,21 +494,31 @@ files = [\"a.py\", \"b.py\"]
         assert_eq!(result.path, path);
 
         let on_disk = std::fs::read_to_string(&path).expect("read");
-        assert!(on_disk.contains("known-cyclic-files"), "not written: {on_disk}");
-        assert!(on_disk.contains("\"pkg/a.py\""), "path not written: {on_disk}");
+        assert!(
+            on_disk.contains("known-cyclic-files"),
+            "not written: {on_disk}"
+        );
+        assert!(
+            on_disk.contains("\"pkg/a.py\""),
+            "path not written: {on_disk}"
+        );
     }
 
     #[test]
     fn patch_config_file_missing_file_is_io_error() {
         let path = Path::new("/nonexistent/does-not-exist/oboros.toml");
         let err = patch_config_file(path, |_doc| {}).expect_err("should fail");
-        assert!(matches!(err, PatchError::Io(_)), "expected Io error, got {err:?}");
+        assert!(
+            matches!(err, PatchError::Io(_)),
+            "expected Io error, got {err:?}"
+        );
     }
 
     #[test]
     fn patch_config_file_invalid_toml_is_parse_error() {
         let mut file = NamedTempFile::new().expect("temp file");
-        file.write_all(b"this is = = not valid toml\n").expect("write");
+        file.write_all(b"this is = = not valid toml\n")
+            .expect("write");
         let path = file.path().to_path_buf();
         let err = patch_config_file(&path, |_doc| {}).expect_err("should fail");
         assert!(
