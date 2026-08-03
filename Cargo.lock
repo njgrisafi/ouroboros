@@ -595,6 +595,7 @@ dependencies = [
  "ouroboros-core",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -605,6 +606,7 @@ dependencies = [
  "serde",
  "tempfile",
  "toml",
+ "toml_edit",
 ]
 
 [[package]]

@@ -20,6 +20,7 @@ Designed for large monorepos with millions of lines of code.
 - Ignore list support (`[[cycles.ignore]]` in config) to suppress known cycles
 - `--dump-ignores` to bootstrap ignore lists from detected cycles
 - Track known cyclic files (`[cycles] known-cyclic-files`) to grandfather current cycles and block new ones; generate with `--dump-cyclic-files`, gate CI with `--check-cyclic-files`
+- Write cyclic-files baseline and ignore entries directly into `oboros.toml` with `--write` (no copy-paste required)
 - `--strict` mode for CI enforcement (exit code 1 on cycles)
 - `--package` flag to filter to intra-package cycles only
 - Ignore cycles contained within generated directories (`[cycles] ignore-dirs`)
@@ -73,7 +74,7 @@ oboros --config path/to/oboros.toml
 All CLI flags:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--strict] [--no-include-ancestor-init] [--exclude <PATH>]
+oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--strict] [--no-include-ancestor-init] [--exclude <PATH>] [--write]
 ```
 
 See [USAGE.md](USAGE.md) for the full configuration reference and detailed usage instructions.

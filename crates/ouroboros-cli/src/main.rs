@@ -6,6 +6,7 @@ use clap::Subcommand;
 use clap::ValueEnum;
 use indicatif::{ProgressBar, ProgressStyle};
 use ouroboros_core::config::Config;
+use ouroboros_core::config_edit;
 use ouroboros_core::cycles;
 use ouroboros_core::discovery;
 use ouroboros_core::graph;
@@ -95,6 +96,10 @@ struct Cli {
     /// TOML fragment (human) or JSON object (--format json), then exit.
     #[arg(long)]
     dump_cyclic_files: bool,
+
+    /// Write the dump output directly into oboros.toml instead of printing to stdout. Requires --dump-cyclic-files or --dump-ignores.
+    #[arg(long)]
+    write: bool,
 
     /// Compare the configured [cycles] known-cyclic-files list against the
     /// freshly-computed cyclic-files set; exit 0 if identical, 1 if any
@@ -211,6 +216,22 @@ fn main() {
         Some(p) => Some(p),
         None => find_config(&cwd),
     };
+
+    if cli.write {
+        if !cli.dump_cyclic_files && !cli.dump_ignores {
+            eprintln!("error: --write requires --dump-cyclic-files or --dump-ignores");
+            std::process::exit(2);
+        }
+        if cli.check_cyclic_files {
+            eprintln!("error: --write cannot be combined with --check-cyclic-files");
+            std::process::exit(2);
+        }
+        if config_path.is_none() {
+            eprintln!("error: --write requires an existing oboros.toml, but none was found");
+            std::process::exit(2);
+        }
+    }
+    let write_config_path: Option<PathBuf> = config_path.clone();
 
     let is_human = matches!(cli.format, OutputFormat::Human);
     let verbose = is_human && cli.verbose;
@@ -570,12 +591,49 @@ fn main() {
         );
         std::process::exit(1);
     } else if cli.dump_cyclic_files {
+        let paths: Vec<String> = cyclic_files
+            .iter()
+            .map(|p| p.display().to_string().replace('\\', "/"))
+            .collect();
+        if cli.write {
+            let Some(config_path) = write_config_path.clone() else {
+                eprintln!("error: --write requires an existing oboros.toml, but none was found");
+                std::process::exit(2);
+            };
+            let old_count = config.cycles.known_cyclic_files.len();
+            let new_count = paths.len();
+            match config_edit::patch_config_file(&config_path, |doc| {
+                config_edit::set_known_cyclic_files(doc, &paths);
+            }) {
+                Ok(result) => {
+                    if result.changed {
+                        eprintln!(
+                            "wrote {}: known-cyclic-files {} entries (was {})",
+                            result.path.display(),
+                            new_count,
+                            old_count
+                        );
+                    } else {
+                        eprintln!("unchanged: known-cyclic-files {new_count} entries");
+                    }
+                    if matches!(cli.format, OutputFormat::Json) {
+                        let out = serde_json::json!({
+                            "written": result.changed,
+                            "path": result.path.display().to_string(),
+                            "known_cyclic_files": new_count,
+                        });
+                        println!("{out}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: failed to write {}: {e}", config_path.display());
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         match cli.format {
             OutputFormat::Human => {
-                let paths: Vec<String> = cyclic_files
-                    .iter()
-                    .map(|p| p.display().to_string().replace('\\', "/"))
-                    .collect();
                 println!(
                     "# paste under [cycles] in oboros.toml (merge into an existing [cycles] table if you have one)"
                 );
@@ -603,6 +661,65 @@ fn main() {
         }
         return;
     } else if cli.dump_ignores {
+        if cli.write {
+            let Some(config_path) = write_config_path.clone() else {
+                eprintln!("error: --write requires an existing oboros.toml, but none was found");
+                std::process::exit(2);
+            };
+            let cycle_file_sets: Vec<Vec<String>> = cycles
+                .iter()
+                .map(|cycle| {
+                    let mut files: Vec<String> = cycle
+                        .iter()
+                        .map(|p| p.display().to_string().replace('\\', "/"))
+                        .collect();
+                    files.sort();
+                    files
+                })
+                .collect();
+            let existing: std::collections::HashSet<Vec<String>> = config
+                .cycles
+                .ignore
+                .iter()
+                .map(|entry| {
+                    let mut files: Vec<String> =
+                        entry.files.iter().map(|f| f.replace('\\', "/")).collect();
+                    files.sort();
+                    files
+                })
+                .collect();
+            let added_entries = cycle_file_sets
+                .iter()
+                .filter(|set| !existing.contains(*set))
+                .count();
+            match config_edit::patch_config_file(&config_path, |doc| {
+                config_edit::merge_ignored_cycles(doc, &cycle_file_sets);
+            }) {
+                Ok(result) => {
+                    if result.changed {
+                        eprintln!(
+                            "wrote {}: added {added_entries} ignore entries",
+                            result.path.display()
+                        );
+                    } else {
+                        eprintln!("unchanged: no new ignore entries");
+                    }
+                    if matches!(cli.format, OutputFormat::Json) {
+                        let out = serde_json::json!({
+                            "written": result.changed,
+                            "path": result.path.display().to_string(),
+                            "added_entries": added_entries,
+                        });
+                        println!("{out}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("error: failed to write {}: {e}", config_path.display());
+                    std::process::exit(1);
+                }
+            }
+            return;
+        }
         match cli.format {
             OutputFormat::Human => {
                 for cycle in &cycles {
