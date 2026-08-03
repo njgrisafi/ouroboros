@@ -1,0 +1,4 @@
+source-roots = ["app"]
+
+[cycles]
+ignore-dirs = ["app/protos/"]

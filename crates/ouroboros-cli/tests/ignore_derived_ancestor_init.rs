@@ -35,7 +35,7 @@ fn ancestor_only_listed_by_default() {
     ]);
     let files = parsed["cyclic_files"].as_array().unwrap();
     let paths: Vec<&str> = files.iter().map(|v| v.as_str().unwrap()).collect();
-    assert_eq!(paths, vec!["alpha/__init__.py", "beta/helpers.py"]);
+    assert_eq!(paths, vec!["src/alpha/__init__.py", "src/beta/helpers.py"]);
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn direct_init_still_listed_with_flag() {
     ]);
     let files = parsed["cyclic_files"].as_array().unwrap();
     let paths: Vec<&str> = files.iter().map(|v| v.as_str().unwrap()).collect();
-    assert_eq!(paths, vec!["pkg/__init__.py", "pkg/mod.py"]);
+    assert_eq!(paths, vec!["src/pkg/__init__.py", "src/pkg/mod.py"]);
 }
 
 #[test]
@@ -124,11 +124,11 @@ fn check_fails_ancestor_only_without_flag() {
         "should exit 1: ancestor-only files in baseline"
     );
     assert!(
-        stderr.contains("+ alpha/__init__.py"),
+        stderr.contains("+ src/alpha/__init__.py"),
         "stderr should list alpha/__init__.py as added"
     );
     assert!(
-        stderr.contains("+ beta/helpers.py"),
+        stderr.contains("+ src/beta/helpers.py"),
         "stderr should list beta/helpers.py as added"
     );
 }
@@ -174,7 +174,9 @@ fn report_unaffected_by_option() {
         .map(|f| f["path"].as_str().unwrap())
         .collect();
     assert!(
-        all_files.iter().any(|p| p.contains("alpha/__init__.py")),
+        all_files
+            .iter()
+            .any(|p| p.contains("src/alpha/__init__.py")),
         "alpha/__init__.py should appear in the normal cycle report"
     );
 }
@@ -227,11 +229,11 @@ fn check_fails_on_stale_list_after_enabling_flag() {
         "should exit 1: stale entries in known list"
     );
     assert!(
-        stderr.contains("- alpha/__init__.py"),
+        stderr.contains("- src/alpha/__init__.py"),
         "stderr should show alpha/__init__.py as removed"
     );
     assert!(
-        stderr.contains("- beta/helpers.py"),
+        stderr.contains("- src/beta/helpers.py"),
         "stderr should show beta/helpers.py as removed"
     );
 }

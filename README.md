@@ -22,9 +22,12 @@ Designed for large monorepos with millions of lines of code.
 - Track known cyclic files (`[cycles] known-cyclic-files`) to grandfather current cycles and block new ones; generate with `--dump-cyclic-files`, gate CI with `--check-cyclic-files`
 - `--strict` mode for CI enforcement (exit code 1 on cycles)
 - `--package` flag to filter to intra-package cycles only
+- Ignore cycles contained within generated directories (`[cycles] ignore-dirs`)
 - Exclude paths from analysis seeds (`exclude` in config / `--exclude` flag); files reachable via imports from non-excluded paths are still reported
 
 See [USAGE.md](USAGE.md) for full details on every flag and config option.
+
+**Note:** As of version 0.6.0, all output paths are project-root-relative.
 
 ## Installation
 
@@ -99,7 +102,7 @@ ouroboros/
 
 Ouroboros runs through six phases:
 
-1. **Discovery** — walks configured source roots, finds `.py` files, and maps each to a canonical module name (e.g. `src/pkg/a.py` → `pkg.a`)
+1. **Discovery** — walks configured source roots, finds `.py` files, and maps each to a canonical module name (e.g. `src/pkg/a.py` → `pkg.a`; file path is project-root-relative)
 2. **Import extraction** — parses each file with [RustPython](https://github.com/RustPython/Parser) and extracts import statements
 3. **Resolution** — resolves raw imports against the first-party module index, classifying each as resolved, unresolved, or ambiguous
 4. **Graph building** — constructs a directed dependency graph from resolved edges

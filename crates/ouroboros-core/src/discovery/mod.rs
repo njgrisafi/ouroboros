@@ -14,7 +14,7 @@ pub use error::DiscoveryError;
 /// A single discovered Python source file.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PythonFile {
-    /// Path relative to its source root (e.g. `core/engine.py`).
+    /// Path relative to the project root (e.g. `src/core/engine.py`).
     pub rel_path: PathBuf,
     /// Canonical dotted Python module name (e.g. `core.engine`).
     pub module_name: String,
@@ -43,12 +43,15 @@ impl DiscoveryResult {
     }
 }
 
-/// Discover all first-party Python files for the given config.
-///
-/// `project_root` is the directory containing `oboros.toml`;
-/// each `source_roots` entry in `config` is resolved relative to it.
-///
-/// Returns a [`DiscoveryResult`] with deterministically sorted file lists.
+fn node_path(src_root: &str, walk_rel: &Path) -> PathBuf {
+    let root_normalized = src_root.trim_end_matches(['/', '\\']);
+    if root_normalized.is_empty() || root_normalized == "." {
+        walk_rel.to_path_buf()
+    } else {
+        PathBuf::from(root_normalized).join(walk_rel)
+    }
+}
+
 pub fn discover(config: &Config, project_root: &Path) -> Result<DiscoveryResult, DiscoveryError> {
     let mut roots = Vec::with_capacity(config.source_roots.len());
 
@@ -58,8 +61,9 @@ pub fn discover(config: &Config, project_root: &Path) -> Result<DiscoveryResult,
 
         let files = rel_paths
             .into_iter()
-            .map(|rel_path| {
-                let module_name = module_name::module_name_for_path(&rel_path);
+            .map(|walk_rel| {
+                let module_name = module_name::module_name_for_path(&walk_rel);
+                let rel_path = node_path(src_root, &walk_rel);
                 PythonFile {
                     rel_path,
                     module_name,
@@ -110,7 +114,10 @@ mod tests {
             .iter()
             .map(|f| f.rel_path.to_string_lossy().to_string())
             .collect();
-        assert_eq!(names, vec!["app.py", "core/__init__.py", "core/engine.py"]);
+        assert_eq!(
+            names,
+            vec!["src/app.py", "src/core/__init__.py", "src/core/engine.py"]
+        );
 
         let module_names: Vec<_> = result.roots[0]
             .files
@@ -121,10 +128,27 @@ mod tests {
     }
 
     #[test]
+    fn discover_single_root_module_names_not_prefixed() {
+        let (tmp, config) = make_project(&["src/core/engine.py"], &["src"]);
+        let result = discover(&config, tmp.path()).unwrap();
+        let file = &result.roots[0].files[0];
+        assert_eq!(file.rel_path, PathBuf::from("src/core/engine.py"));
+        assert_eq!(file.module_name, "core.engine");
+        assert_ne!(file.module_name, "src.core.engine");
+    }
+
+    #[test]
     fn discover_dot_root() {
         let (tmp, config) = make_project(&["app.py", "models/user.py"], &["."]);
         let result = discover(&config, tmp.path()).unwrap();
         assert_eq!(result.total_files(), 2);
+        let paths: Vec<_> = result.roots[0]
+            .files
+            .iter()
+            .map(|f| f.rel_path.to_string_lossy().to_string())
+            .collect();
+        assert!(paths.contains(&"app.py".to_string()));
+        assert!(paths.contains(&"models/user.py".to_string()));
     }
 
     #[test]
@@ -133,6 +157,8 @@ mod tests {
         let result = discover(&config, tmp.path()).unwrap();
         assert_eq!(result.roots.len(), 2);
         assert_eq!(result.total_files(), 2);
+        assert_eq!(result.roots[0].files[0].rel_path, PathBuf::from("src/a.py"));
+        assert_eq!(result.roots[1].files[0].rel_path, PathBuf::from("lib/b.py"));
     }
 
     #[test]
@@ -144,5 +170,22 @@ mod tests {
         };
         let result = discover(&config, tmp.path());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn node_path_normalization() {
+        let cases: &[(&str, &str, &str)] = &[
+            (".", "a/b.py", "a/b.py"),
+            ("", "a/b.py", "a/b.py"),
+            ("src", "a/b.py", "src/a/b.py"),
+            ("src/", "a/b.py", "src/a/b.py"),
+        ];
+        for (root, file, expected) in cases {
+            assert_eq!(
+                node_path(root, Path::new(file)),
+                PathBuf::from(expected),
+                "root={root:?} file={file:?}"
+            );
+        }
     }
 }

@@ -1,0 +1,8 @@
+source-roots = ["src"]
+
+# Pre-0.6.0 source-root-relative paths (bare, no `src/` prefix). These do NOT
+# match the project-root-relative cycle files, so the cycle stays visible and
+# the migration hint fires.
+[[cycles.ignore]]
+files = ["app/a.py", "app/b.py"]
+reason = "pre-0.6.0 form; should not suppress the cycle"

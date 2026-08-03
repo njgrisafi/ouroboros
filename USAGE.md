@@ -20,7 +20,7 @@ oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--d
 | `--ignore-derived-ancestor-init` | Exclude files that are cyclic only via a derived ancestor-`__init__.py` edge from the known-cyclic-files baseline. Overrides `[cycles] ignore-derived-ancestor-init` in config. Baseline-only; does not affect the normal cycle report. |
 | `--strict` | Exit with code 1 if any (non-suppressed) cycles are detected. When `--trace` is also present, exits 1 only if the union of impacting cycles across all traced paths is non-empty. Works with both output formats. |
 | `--no-include-ancestor-init` | Disable ancestor-package `__init__.py` edges. Overrides `include-ancestor-init` in config. See [`[resolve]` section](#resolve-section). |
-| `--trace <PATH>`, `-t <PATH>` | Report cycles that impact the given file or directory path(s), relative to a source root. Repeatable and/or comma-separated. When omitted, output is identical to today. See [Cycle impact](#cycle-impact---trace). |
+| `--trace <PATH>`, `-t <PATH>` | Report cycles that impact the given file or directory path(s), relative to the project root. Repeatable and/or comma-separated. When omitted, output is identical to today. See [Cycle impact](#cycle-impact---trace). |
 | `--exclude <PATH>` | Exclude paths (files or directories) from analysis seeds. Repeatable and/or comma-separated. Unioned with `exclude` in config. See [Exclude paths](#exclude-paths). |
 
 If no config file is found, built-in defaults are used (source root: `src`, top-level imports only, minimum SCC size: 2, ancestor `__init__.py` edges enabled).
@@ -165,6 +165,76 @@ oboros --dump-ignores
 oboros --dump-ignores --format json
 ```
 
+#### `[cycles] ignore-dirs`
+
+Suppress cycles that are entirely contained within specified directories. A cycle is dropped if every file in it is under one of the ignored directories; cycles with any file outside the ignored dirs are still reported.
+
+```toml
+[cycles]
+ignore-dirs = ["app/protos/", "app/migrations/"]
+```
+
+**Semantics:**
+
+- **Entries are project-root-relative** (same form as `exclude`, e.g. `["app/protos/", "app/migrations/"]`). Matching mirrors `exclude`: an entry matches a file exactly or matches any file under it as a directory prefix.
+- **The decision is based purely on cycle membership, not on who imports the cycle:** if every file in a detected cycle is under one of the ignored directories, the whole cycle is dropped — even if non-ignored code imports into it. This is the opposite of `exclude`, which keys off import reachability from seeds.
+- **A cycle is dropped entirely if every one of its files is under one of the ignored directories.** A cycle with any file outside the ignored dirs is still reported. This is the key difference from `exclude`: real cycles that cross from your code into generated directories are preserved.
+- **Dropped cycles are removed everywhere:** not shown in human or JSON output, do not trigger `--strict`, and are excluded from `--dump-cyclic-files` / `--check-cyclic-files` / the `cyclic_files` set.
+
+**Contrast with neighbors:**
+
+- `exclude` = removes files from the analysis seed set (mypy-style); excluded files still get reported if a non-excluded file imports them, so `exclude` cannot hide a generated-internal cycle that your code reaches.
+- `[[cycles.ignore]]` = suppresses one exact set of files (must match the cycle exactly).
+- `ignore-dirs` = suppresses any cycle contained within the named directories, no need to enumerate file sets.
+
+**Worked examples:**
+
+*Example 1: cycle fully inside an ignored directory (suppressed)*
+
+Config:
+```toml
+source-roots = ["app"]
+
+[cycles]
+ignore-dirs = ["app/protos/"]
+```
+
+Topology: two generated protobuf stubs import each other:
+```
+app/protos/scheduling/common/v1/__init__.py ⇄ app/protos/scheduling/v1/__init__.py
+```
+
+Both files are under `app/protos/`, so the entire cycle is dropped. Even though your application code imports `protos.scheduling.v1`, the cycle is removed from the report, from `--strict`, and from `--dump-cyclic-files`. Human output shows:
+```
+--- dependency cycles (0) ---
+(1 cycles ignored by ignore-dirs)
+```
+
+*Example 2: cross-boundary cycle (still reported)*
+
+Same config (`ignore-dirs = ["app/protos/"]`). Now a cycle routes through your own code:
+```
+app/services/a.py → app/protos/gen/x.py → app/services/b.py → app/services/a.py
+```
+
+This strongly connected component contains `app/services/a.py` and `app/services/b.py`, which are outside `app/protos/`. Because not every member is under an ignored directory, the cycle is still reported. `ignore-dirs` only hides cycles that are entirely generated-internal; it never hides real cycles that involve your hand-written code. Human output shows:
+```
+--- dependency cycles (1) ---
+cycle 1 (3 files)
+  app/services/a.py (import at line 5)
+  app/protos/gen/x.py (import at line 12)
+  app/services/b.py (import at line 8)
+```
+
+**Common use case:** generated code you don't own (betterproto stubs, database migrations, etc.):
+
+```toml
+[cycles]
+ignore-dirs = ["app/protos/", "app/migrations/"]
+```
+
+**Validation:** entries must be relative (absolute paths and empty strings are rejected), consistent with `exclude`.
+
 #### `[cycles] known-cyclic-files`
 
 A sorted list of first-party files known to participate in an import cycle. Used with `--check-cyclic-files` to grandfather currently-cyclic files and block new ones from being introduced.
@@ -305,6 +375,8 @@ oboros --exclude extra_dir/
 - **Excluded files that nothing non-excluded imports are dropped.** For example, a `tests/` directory that imports app code but is not imported by app code will be dropped entirely — it is not reachable from any non-excluded seed.
 - **Excluding one member of a mutual cycle with a non-excluded file does NOT hide the cycle.** Both files are mutually reachable, so both are retained.
 
+> **Want to hide cycles inside a directory (e.g. generated code)?** `exclude` won't do that — it only trims analysis seeds, so a generated-internal cycle that your code imports is still reported. Use [`[cycles] ignore-dirs`](#cycles-ignore-dirs) instead, which drops any cycle whose files are all under the named directories.
+
 #### Example: excluding a test directory
 
 ```toml
@@ -318,8 +390,7 @@ If `app/auth.py` imports `tests.helpers` (unusual but possible), then `tests/hel
 
 ### Matching rules
 
-- Patterns are matched against **source-root-relative paths** (the same paths shown in cycle output, e.g. `app/main.py` not `src/app/main.py`).
-- Source-root prefixes are stripped automatically, so `src/app/main.py` and `app/main.py` both match the node `app/main.py` when `source-roots = ["src"]`.
+- Patterns are matched against **project-root-relative paths** (the same paths shown in cycle output, e.g. `src/app/main.py`).
 - A pattern matches either an **exact file** or a **directory prefix** (all files under that directory). A trailing `/` forces directory matching; without it, an exact file match is tried first, then directory prefix.
 - A bare `app/` pattern matches across **all source roots** — there is no per-root scoping.
 
@@ -342,7 +413,7 @@ If `app/auth.py` imports `tests.helpers` (unusual but possible), then `tests/hel
 
 ### JSON output
 
-When `--exclude` is used, the JSON report includes an optional top-level `excluded` array listing the applied normalized patterns:
+When `--exclude` is used, the JSON report includes an optional top-level `excluded` array listing the applied normalized patterns (project-root-relative):
 
 ```json
 {
@@ -358,7 +429,7 @@ The `excluded` field is **omitted** when no excludes are applied (existing-consu
 ### Known limitations
 
 - **No parse-skipping speedup.** The MVP still parses all files; exclusion prunes the output graph, not the parse work. Parse-skipping is a planned future optimization.
-- **Multi-source-root path collisions.** If two source roots both contain a file at the same relative path (e.g. `src/utils/helper.py` and `lib/utils/helper.py` both produce node `utils/helper.py`), exclude behavior for that path is undefined. This is a pre-existing limitation.
+- **Multi-source-root module-name collisions.** If two source roots both contain a file at the same relative path (e.g. `src/utils/helper.py` and `lib/utils/helper.py` both produce module `utils.helper`), the module name is ambiguous. Ouroboros now emits a warning when this is detected.
 - **No per-root scoping.** A pattern like `app/` matches across all source roots.
 - **`report` subcommand / HTML output** does not surface exclude information yet.
 
@@ -374,9 +445,9 @@ Lists each configured source root and the `.py` files discovered within it, alon
 
 ```
 source root: /path/to/src (42 files)
-  pkg/__init__.py -> pkg
-  pkg/a.py -> pkg.a
-  pkg/b.py -> pkg.b
+  src/pkg/__init__.py -> pkg
+  src/pkg/a.py -> pkg.a
+  src/pkg/b.py -> pkg.b
   ...
 ```
 
@@ -421,11 +492,11 @@ The full adjacency list of the file-level dependency graph:
 ```
 --- dependency graph ---
 
-pkg/__init__.py
-  -> pkg/a.py
-pkg/a.py
-  -> pkg/b.py
-  -> pkg/c.py
+src/pkg/__init__.py
+  -> src/pkg/a.py
+src/pkg/a.py
+  -> src/pkg/b.py
+  -> src/pkg/c.py
 ```
 
 ### Dependency cycles
@@ -439,18 +510,18 @@ SCCs that pass the configured size filter, grouped by top-level package. Each fi
 package: pkg (2 cycles)
 
 cycle 1 (3 files)
-  pkg/a.py (imports at lines 12, 45)
-  pkg/b.py (import at line 8)
-  pkg/c.py (import at line 3)
+  src/pkg/a.py (imports at lines 12, 45)
+  src/pkg/b.py (import at line 8)
+  src/pkg/c.py (import at line 3)
 
 cycle 2 (2 files)
-  pkg/x.py (import at line 5)
-  pkg/y.py (import at line 11)
+  src/pkg/x.py (import at line 5)
+  src/pkg/y.py (import at line 11)
 
 (cross-package: pkg, lib) (1 cycle)
 
 cycle 3 (2 files)
-  pkg/foo.py (import at line 7)
+  src/pkg/foo.py (import at line 7)
   lib/bar.py (import at line 14)
 ```
 
@@ -474,11 +545,11 @@ When `--format json` is used, all verbose sections above are suppressed and a si
       "size": 3,
       "files": [
         {
-          "path": "pkg/a.py",
+          "path": "src/pkg/a.py",
           "import_lines": [12, 45],
           "edges": [
-            { "to": "pkg/b.py", "lines": [12] },
-            { "to": "pkg/c.py", "lines": [45] }
+            { "to": "src/pkg/b.py", "lines": [12] },
+            { "to": "src/pkg/c.py", "lines": [45] }
           ]
         }
       ]
@@ -495,7 +566,7 @@ When `--format json` is used, all verbose sections above are suppressed and a si
 | `cycles[].index` | integer | 1-based cycle index. |
 | `cycles[].packages` | array of strings | Sorted list of top-level packages involved in the cycle (e.g. `["pkg"]` for intra-package, `["lib", "pkg"]` for cross-package). |
 | `cycles[].size` | integer | Number of files in the cycle. |
-| `cycles[].files[].path` | string | Relative file path. |
+| `cycles[].files[].path` | string | Project-root-relative file path. |
 | `cycles[].files[].import_lines` | array of integers | Sorted line numbers of imports to other cycle members. |
 | `cycles[].files[].edges[].to` | string | Import target path within the cycle. |
 | `cycles[].files[].edges[].lines` | array of integers | Sorted line numbers for that specific edge. |
@@ -531,23 +602,20 @@ For reachable impacts, Ouroboros reports the **shortest import path** from `T` t
 
 ```bash
 # Trace a single file
-oboros --trace app/entry.py
+oboros --trace src/app/entry.py
 
 # Short alias
-oboros -t app/entry.py
+oboros -t src/app/entry.py
 
 # Trace a directory (all .py files under it)
-oboros --trace app/
+oboros --trace src/app/
 
 # Trace multiple paths (comma-separated or repeated flag)
-oboros --trace app/entry.py,app/mid.py
-oboros --trace app/entry.py --trace app/mid.py
+oboros --trace src/app/entry.py,src/app/mid.py
+oboros --trace src/app/entry.py --trace src/app/mid.py
 
 # Combine with --format json for programmatic use
-oboros --format json --trace app/
-
-# Source-root prefix is stripped automatically
-oboros --trace src/app/entry.py   # same as --trace app/entry.py when source-roots = ["src"]
+oboros --format json --trace src/app/
 ```
 
 ### Human output
@@ -557,21 +625,21 @@ When `--trace` is used, a `--- cycle impact ---` section is appended after the d
 ```
 --- cycle impact ---
 
-trace: app/ (directory, 4 of 6 files impacted)
-  app/core_a.py:
+trace: src/app/ (directory, 4 of 6 files impacted)
+  src/app/core_a.py:
     impacted by 1 cycle:
       cycle 1 (member)
-  app/core_b.py:
+  src/app/core_b.py:
     impacted by 1 cycle:
       cycle 1 (member)
-  app/entry.py:
+  src/app/entry.py:
     impacted by 1 cycle:
-      cycle 1 (reachable via app/entry.py:1 -> app/mid.py:1 -> app/core_a.py)
-  app/mid.py:
+      cycle 1 (reachable via src/app/entry.py:1 -> src/app/mid.py:1 -> src/app/core_a.py)
+  src/app/mid.py:
     impacted by 1 cycle:
-      cycle 1 (reachable via app/mid.py:1 -> app/core_a.py)
+      cycle 1 (reachable via src/app/mid.py:1 -> src/app/core_a.py)
 
-trace: app/isolated.py (file)
+trace: src/app/isolated.py (file)
   not impacted by any cycle
 
 (unknown paths: does/not/exist.py)
@@ -593,20 +661,20 @@ When `--format json --trace` is used, two optional top-level fields are added:
   "cycles": [ ... ],
   "traced": [
     {
-      "path": "app/entry.py",
+      "path": "src/app/entry.py",
       "kind": "file",
       "files": [
         {
-          "path": "app/entry.py",
+          "path": "src/app/entry.py",
           "impacts": [
             {
               "cycle_index": 1,
               "relationship": "reachable",
-              "entry": "app/core_a.py",
+              "entry": "src/app/core_a.py",
               "from_lines": [1],
               "path": [
-                { "from": "app/entry.py", "to": "app/mid.py", "lines": [1] },
-                { "from": "app/mid.py",   "to": "app/core_a.py", "lines": [1] }
+                { "from": "src/app/entry.py", "to": "src/app/mid.py", "lines": [1] },
+                { "from": "src/app/mid.py",   "to": "src/app/core_a.py", "lines": [1] }
               ]
             }
           ]
@@ -622,17 +690,17 @@ These fields are **omitted** when `--trace` is not used, so existing consumers a
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `traced[].path` | string | The traced path as given (directory paths end with `/`). |
+| `traced[].path` | string | The traced path as given (directory paths end with `/`). Project-root-relative. |
 | `traced[].kind` | string | `"file"` or `"directory"`. |
-| `traced[].files[].path` | string | Graph node path (matches `cycles[].files[].path`). |
+| `traced[].files[].path` | string | Graph node path (matches `cycles[].files[].path`). Project-root-relative. |
 | `traced[].files[].impacts` | array | Omitted when empty (file is clean). |
 | `traced[].files[].impacts[].cycle_index` | integer | Matches `cycles[].index`. |
 | `traced[].files[].impacts[].relationship` | string | `"member"` or `"reachable"`. |
-| `traced[].files[].impacts[].entry` | string | First cycle member reached. |
+| `traced[].files[].impacts[].entry` | string | First cycle member reached. Project-root-relative. |
 | `traced[].files[].impacts[].from_lines` | array of integers | Import line(s) in the traced file that begin the branch. Omitted for `"member"`. |
 | `traced[].files[].impacts[].path` | array of hops | Import chain from traced file to cycle entry. Omitted for `"member"`. |
-| `traced[].files[].impacts[].path[].from` | string | Importing file. |
-| `traced[].files[].impacts[].path[].to` | string | Imported file (next toward the cycle). |
+| `traced[].files[].impacts[].path[].from` | string | Importing file. Project-root-relative. |
+| `traced[].files[].impacts[].path[].to` | string | Imported file (next toward the cycle). Project-root-relative. |
 | `traced[].files[].impacts[].path[].lines` | array of integers | Import line numbers for this edge. |
 | `unknown_paths` | array of strings | Paths that matched no graph nodes. Omitted when empty. |
 
@@ -674,7 +742,21 @@ oboros --package --strict
 
 ---
 
-## Practical examples
+## Migrating to 0.6.0
+
+Version 0.6.0 changes all file paths from **source-root-relative** to **project-root-relative** (relative to the directory containing `oboros.toml`). For example, a file previously shown as `pkg/a.py` under `source-roots = ["src"]` now appears as `src/pkg/a.py` everywhere.
+
+**What you need to update:**
+
+- **`[[cycles.ignore]]` entries:** Update `files` lists to use project-root-relative paths. For example, change `files = ["pkg/a.py", "pkg/b.py"]` to `files = ["src/pkg/a.py", "src/pkg/b.py"]`. Oboros will warn if it detects pre-0.6.0 paths.
+- **`[cycles] known-cyclic-files`:** Regenerate with `oboros --dump-cyclic-files` and update the list in your config.
+- **`--trace` and `--exclude` CLI arguments:** Use project-root-relative paths. For example, `--trace src/app/entry.py` instead of `--trace app/entry.py`.
+- **`oboros report --source-root`:** This flag is now `oboros report --root`. The old flag still works with a deprecation warning.
+- **JSON consumers:** The schema `version` field is now `2`. All paths in `cycles[].files[].path`, `cycles[].files[].edges[].to`, `traced[].path`, `traced[].files[].path`, `traced[].files[].impacts[].entry`, `traced[].files[].impacts[].path[].from`, `traced[].files[].impacts[].path[].to`, `excluded[]`, and `cyclic_files[]` are now project-root-relative.
+
+---
+
+
 
 ### CI gate: fail on any new cycles
 
@@ -709,14 +791,14 @@ Combined with `max-scc-size` in config, this targets small intra-package tangles
 ### Trace a file's cycle impact
 
 ```bash
-# Find all cycles that affect app/entry.py
-oboros --trace app/entry.py
+# Find all cycles that affect src/app/entry.py
+oboros --trace src/app/entry.py
 
-# CI: fail only if app/entry.py is impacted by a cycle
-oboros --trace app/entry.py --strict
+# CI: fail only if src/app/entry.py is impacted by a cycle
+oboros --trace src/app/entry.py --strict
 
 # Trace an entire directory
-oboros --trace app/ --format json | jq '.traced[0].files[] | select(.impacts != null)'
+oboros --trace src/app/ --format json | jq '.traced[0].files[] | select(.impacts != null)'
 ```
 
 ### Grandfather known cycles and block new ones

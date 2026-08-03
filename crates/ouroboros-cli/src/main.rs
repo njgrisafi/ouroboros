@@ -31,9 +31,13 @@ enum Commands {
         #[arg(long, short, default_value = "report.html")]
         output: PathBuf,
 
-        /// Project source root for reading import lines. If provided, the report
+        /// Project root for reading import lines. If provided, the report
         /// shows actual import statements in the diff view.
         #[arg(long)]
+        root: Option<PathBuf>,
+
+        /// Deprecated: use --root instead.
+        #[arg(long, hide = true)]
         source_root: Option<PathBuf>,
     },
 }
@@ -188,10 +192,15 @@ fn main() {
     if let Some(Commands::Report {
         input,
         output,
+        root,
         source_root,
     }) = cli.command.as_ref()
     {
-        report::run(input, output, source_root.as_deref());
+        if source_root.is_some() {
+            eprintln!("warning: --source-root is deprecated; use --root instead");
+        }
+        let effective_root = root.as_deref().or(source_root.as_deref());
+        report::run(input, output, effective_root);
         return;
     }
 
@@ -282,10 +291,18 @@ fn main() {
     ));
     if verbose {
         println!("\n--- imports ---");
+        println!("project root: {}", project_root.display());
     }
     for root in &discovery_result.roots {
+        if verbose {
+            println!(
+                "source root: {} ({} files)",
+                root.path.display(),
+                root.files.len()
+            );
+        }
         for file in &root.files {
-            let abs_path = root.path.join(&file.rel_path);
+            let abs_path = project_root.join(&file.rel_path);
             let source = match std::fs::read_to_string(&abs_path) {
                 Ok(s) => s,
                 Err(e) => {
@@ -326,7 +343,7 @@ fn main() {
     // Build first-party module index and resolve imports.
     spinner.set_message("Resolving imports...");
     let index = resolver::ModuleIndex::from_discovery(&discovery_result);
-    let resolve_result = resolver::resolve_all(&discovery_result, &index, &config);
+    let resolve_result = resolver::resolve_all(&discovery_result, &index, &config, &project_root);
 
     if verbose {
         println!(
@@ -348,6 +365,15 @@ fn main() {
 
     spinner.set_message("Building dependency graph...");
     let graph_result = graph::build_file_dependency_graph(&discovery_result, &resolve_result);
+
+    for (module_name, paths) in &graph_result.module_collisions {
+        let path_list: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
+        eprintln!(
+            "warning: module '{}' is defined by multiple files: {}",
+            module_name,
+            path_list.join(", ")
+        );
+    }
 
     if verbose {
         println!("\n--- dependency graph ---\n");
@@ -392,6 +418,10 @@ fn main() {
     spinner.set_message("Detecting cycles...");
     let all_cycles = graph::dependency_cycles(&effective_graph);
     let size_filtered = cycles::filter_cycles_by_size(all_cycles, &config.cycles);
+    // Rebind `size_filtered` to the kept partition so every downstream consumer
+    // (report, --strict, cyclic-files baseline) sees only non-dir-ignored cycles.
+    let (size_filtered, dir_ignored_cycles) =
+        cycles::partition_dir_ignored(size_filtered, &config.cycles.ignore_dirs);
 
     let cyclic_surface_active =
         cli.dump_cyclic_files || cli.check_cyclic_files || cli.show_cyclic_files;
@@ -415,7 +445,8 @@ fn main() {
         // Reuses the same index (edge-independent) and excluded set (path-keyed).
         let mut direct_config = config.clone();
         direct_config.resolve.include_ancestor_init = false;
-        let direct_resolve = resolver::resolve_all(&discovery_result, &index, &direct_config);
+        let direct_resolve =
+            resolver::resolve_all(&discovery_result, &index, &direct_config, &project_root);
         let direct_graph = graph::build_file_dependency_graph(&discovery_result, &direct_resolve);
         let direct_effective = if excluded.is_empty() {
             direct_graph.graph
@@ -424,7 +455,9 @@ fn main() {
         };
         let direct_cycles = graph::dependency_cycles(&direct_effective);
         let direct_size_filtered = cycles::filter_cycles_by_size(direct_cycles, &config.cycles);
-        cycles::collect_cyclic_files(&direct_size_filtered)
+        let direct_kept =
+            cycles::partition_dir_ignored(direct_size_filtered, &config.cycles.ignore_dirs).0;
+        cycles::collect_cyclic_files(&direct_kept)
     } else {
         cycles::collect_cyclic_files(&size_filtered)
     };
@@ -446,15 +479,39 @@ fn main() {
                 .collect::<Vec<_>>()
                 .join(", ");
             eprintln!("warning: ignore entry [{files_str}] did not match any detected cycle");
+            for root in &config.source_roots {
+                let root_prefix = root.trim_end_matches('/').to_string() + "/";
+                let prefixed: Vec<std::path::PathBuf> = ignored_entry
+                    .files
+                    .iter()
+                    .map(|f| std::path::PathBuf::from(format!("{root_prefix}{f}")))
+                    .collect();
+                let mut sorted_prefixed = prefixed.clone();
+                sorted_prefixed.sort();
+                if filter_result.suppressed.contains(&sorted_prefixed)
+                    || filter_result.kept.contains(&sorted_prefixed)
+                {
+                    let hint = prefixed
+                        .iter()
+                        .map(|p| format!("\"{}\"", p.display()))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    eprintln!(
+                        "  hint: ignore entry looks pre-0.6.0 (source-root-relative); rewrite to project-root-relative, e.g. files = [{hint}]"
+                    );
+                    break;
+                }
+            }
         }
     }
 
     let cycles = if cli.package {
-        cycles::filter_cycles_by_package(filter_result.kept)
+        cycles::filter_cycles_by_package(filter_result.kept, &config.source_roots)
     } else {
         filter_result.kept
     };
-    let suppressed_count = filter_result.suppressed.len();
+    let ignore_list_suppressed = filter_result.suppressed.len();
+    let suppressed_count = ignore_list_suppressed + dir_ignored_cycles.len();
 
     spinner.finish_and_clear();
 
@@ -495,6 +552,18 @@ fn main() {
         }
         for path in &removed {
             eprintln!("  - {path}");
+        }
+        let all_added_are_prefixed = !added.is_empty()
+            && config.source_roots.iter().any(|root| {
+                let prefix = root.trim_end_matches('/').to_string() + "/";
+                removed
+                    .iter()
+                    .all(|r| added.iter().any(|a| a.as_str() == format!("{prefix}{r}")))
+            });
+        if all_added_are_prefixed {
+            eprintln!(
+                "  hint: known-cyclic-files uses pre-0.6.0 source-root-relative paths; run 'oboros --dump-cyclic-files' to regenerate."
+            );
         }
         eprintln!(
             "run `oboros --dump-cyclic-files` to update [cycles] known-cyclic-files in oboros.toml"
@@ -558,14 +627,23 @@ fn main() {
     match cli.format {
         OutputFormat::Human => {
             println!("\n--- dependency cycles ({}) ---", cycles.len());
-            if suppressed_count > 0 {
-                println!("({} cycles suppressed by ignore list)", suppressed_count);
+            if ignore_list_suppressed > 0 {
+                println!(
+                    "({} cycles suppressed by ignore list)",
+                    ignore_list_suppressed
+                );
+            }
+            if !dir_ignored_cycles.is_empty() {
+                println!(
+                    "({} cycles ignored by ignore-dirs)",
+                    dir_ignored_cycles.len()
+                );
             }
             if cli.package {
                 println!("(filtered to intra-package cycles)");
             }
 
-            let cycle_data = output::order_cycles(&cycles);
+            let cycle_data = output::order_cycles(&cycles, &config.source_roots);
 
             let mut current_packages: Option<&Vec<String>> = None;
             let mut group_count = 0;
@@ -710,16 +788,19 @@ fn main() {
                 &cycles,
                 suppressed_count,
                 &graph_result.edge_metadata,
-                traced,
-                unknown_paths,
-                applied_exclude_patterns,
-                if cli.show_cyclic_files {
-                    cyclic_files
-                        .iter()
-                        .map(|p| p.display().to_string().replace('\\', "/"))
-                        .collect()
-                } else {
-                    vec![]
+                output::JsonReportInput {
+                    traced,
+                    unknown_paths,
+                    excluded: applied_exclude_patterns,
+                    cyclic_files: if cli.show_cyclic_files {
+                        cyclic_files
+                            .iter()
+                            .map(|p| p.display().to_string().replace('\\', "/"))
+                            .collect()
+                    } else {
+                        vec![]
+                    },
+                    source_roots: &config.source_roots,
                 },
             );
             println!("{}", serde_json::to_string_pretty(&report).unwrap());

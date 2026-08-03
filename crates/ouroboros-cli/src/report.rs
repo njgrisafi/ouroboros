@@ -1,6 +1,5 @@
 use crate::output::{JsonCycle, JsonReport};
 use chrono::Local;
-use ouroboros_core::config::Config;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 use std::path::{Path, PathBuf};
@@ -57,9 +56,9 @@ pub fn load_json_report(path: &Path) -> Result<JsonReport, String> {
         .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     let report: JsonReport =
         serde_json::from_str(&contents).map_err(|e| format!("failed to parse JSON report: {e}"))?;
-    if report.version != 1 {
+    if report.version != 2 {
         return Err(format!(
-            "unsupported report version: {} (expected 1)",
+            "unsupported report version: {} (expected 2; regenerate with oboros 0.6.0)",
             report.version
         ));
     }
@@ -97,65 +96,34 @@ fn html_escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn resolve_source_roots(explicit: Option<&Path>) -> Vec<PathBuf> {
+fn resolve_project_root(explicit: Option<&Path>) -> Option<PathBuf> {
     if let Some(root) = explicit {
-        return vec![root.to_path_buf()];
+        return Some(root.to_path_buf());
     }
 
-    let cwd = match std::env::current_dir() {
-        Ok(d) => d,
-        Err(_) => return vec![],
-    };
-
-    let config_path = match crate::find_config(&cwd) {
-        Some(p) => p,
-        None => return vec![],
-    };
-
-    let project_root = match config_path.parent() {
-        Some(p) => p.to_path_buf(),
-        None => return vec![],
-    };
-
-    let contents = match std::fs::read_to_string(&config_path) {
-        Ok(s) => s,
-        Err(_) => return vec![],
-    };
-
-    let config = match Config::from_toml(&contents) {
-        Ok(c) => c,
-        Err(_) => return vec![],
-    };
-
-    config
-        .source_roots
-        .iter()
-        .map(|sr| project_root.join(sr))
-        .collect()
+    let cwd = std::env::current_dir().ok()?;
+    let config_path = crate::find_config(&cwd)?;
+    config_path.parent().map(|p| p.to_path_buf())
 }
 
-struct SourceLineCache<'a> {
-    source_roots: &'a [PathBuf],
+struct SourceLineCache {
+    project_root: Option<PathBuf>,
     lines_by_path: HashMap<PathBuf, Option<Vec<String>>>,
 }
 
-impl<'a> SourceLineCache<'a> {
-    fn new(source_roots: &'a [PathBuf]) -> Self {
+impl SourceLineCache {
+    fn new(project_root: Option<PathBuf>) -> Self {
         Self {
-            source_roots,
+            project_root,
             lines_by_path: HashMap::new(),
         }
     }
 
     fn read_source_line(&mut self, file_path: &str, line_number: u32) -> Option<String> {
         let line_idx = (line_number as usize).checked_sub(1)?;
-        for i in 0..self.source_roots.len() {
-            let full_path = self.source_roots[i].join(file_path);
-            if let Some(line) = self.read_full_path_line(full_path, line_idx) {
-                return Some(line);
-            }
-        }
-        None
+        let root = self.project_root.as_ref()?;
+        let full_path = root.join(file_path);
+        self.read_full_path_line(full_path, line_idx)
     }
 
     fn read_full_path_line(&mut self, full_path: PathBuf, line_idx: usize) -> Option<String> {
@@ -171,8 +139,6 @@ impl<'a> SourceLineCache<'a> {
         let all_lines = all_lines.as_ref()?;
         let first_line = all_lines.get(line_idx)?;
         let trimmed = first_line.trim();
-        // If the line has an opening paren but no closing paren,
-        // it's a multi-line import — collect continuation lines.
         if trimmed.contains('(') && !trimmed.contains(')') {
             let mut parts = vec![trimmed.to_string()];
             for next_line in &all_lines[line_idx + 1..] {
@@ -192,7 +158,7 @@ impl<'a> SourceLineCache<'a> {
 pub fn generate_html(
     report: &JsonReport,
     stats: &ReportStats,
-    source_roots: &[PathBuf],
+    project_root: Option<&Path>,
     traces_filename: &str,
 ) -> String {
     let mut html = String::with_capacity(32768);
@@ -203,7 +169,7 @@ pub fn generate_html(
     write_summary(&mut html, stats);
     write_package_table(&mut html, &stats.package_frequency);
     write_size_table(&mut html, &stats.size_distribution);
-    write_cycle_table(&mut html, &report.cycles, source_roots);
+    write_cycle_table(&mut html, &report.cycles, project_root);
     write_cyclic_files_section(&mut html, &report.cyclic_files);
     write_cycle_impact_index(&mut html, &report.traced, traces_filename);
     write_scripts(&mut html);
@@ -488,8 +454,8 @@ fn write_size_table(html: &mut String, size_distribution: &[(usize, usize)]) {
     html.push_str("    </table>\n");
 }
 
-fn write_cycle_table(html: &mut String, cycles: &[JsonCycle], source_roots: &[PathBuf]) {
-    let mut source_lines = SourceLineCache::new(source_roots);
+fn write_cycle_table(html: &mut String, cycles: &[JsonCycle], project_root: Option<&Path>) {
+    let mut source_lines = SourceLineCache::new(project_root.map(|p| p.to_path_buf()));
 
     html.push_str("    <span id=\"all-cycles\" class=\"section-anchor\"></span>\n");
     html.push_str("\n    <h2>All Cycles</h2>\n");
@@ -556,11 +522,7 @@ fn write_cycle_table(html: &mut String, cycles: &[JsonCycle], source_roots: &[Pa
             } else {
                 for edge in &file.edges {
                     for &line_num in &edge.lines {
-                        let source_text = if source_roots.is_empty() {
-                            None
-                        } else {
-                            source_lines.read_source_line(&file.path, line_num)
-                        };
+                        let source_text = source_lines.read_source_line(&file.path, line_num);
                         if let Some(code) = source_text {
                             let _ = writeln!(
                                 html,
@@ -1248,7 +1210,7 @@ pub fn run(input: &Path, output: &Path, source_root: Option<&Path>) {
         std::process::exit(1);
     });
 
-    let source_roots = resolve_source_roots(source_root);
+    let project_root = resolve_project_root(source_root);
     let stats = ReportStats::from_report(&report);
 
     let output_stem = output
@@ -1263,7 +1225,7 @@ pub fn run(input: &Path, output: &Path, source_root: Option<&Path>) {
         .unwrap_or("report.html")
         .to_string();
 
-    let html = generate_html(&report, &stats, &source_roots, &output_stem);
+    let html = generate_html(&report, &stats, project_root.as_deref(), &output_stem);
     std::fs::write(output, html).unwrap_or_else(|e| {
         eprintln!("error: failed to write {}: {e}", output.display());
         std::process::exit(1);
@@ -1477,18 +1439,21 @@ mod tests {
         let dir = std::env::temp_dir();
         let path = dir.join("oboros_test_wrongver.json");
         let json =
-            r#"{"version":99,"summary":{"cycles_reported":0,"cycles_suppressed":0},"cycles":[]}"#;
+            r#"{"version":1,"summary":{"cycles_reported":0,"cycles_suppressed":0},"cycles":[]}"#;
         std::fs::write(&path, json).unwrap();
         let result = load_json_report(&path);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("unsupported report version"));
+        assert_eq!(
+            result.unwrap_err(),
+            "unsupported report version: 1 (expected 2; regenerate with oboros 0.6.0)"
+        );
     }
 
     #[test]
     fn load_mismatched_cycle_count_returns_error() {
         let dir = std::env::temp_dir();
         let path = dir.join("oboros_test_bad_count.json");
-        let json = r#"{"version":1,"summary":{"cycles_reported":2,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
+        let json = r#"{"version":2,"summary":{"cycles_reported":2,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
         std::fs::write(&path, json).unwrap();
         let result = load_json_report(&path);
         assert!(result.is_err());
@@ -1499,7 +1464,7 @@ mod tests {
     fn load_mismatched_cycle_size_returns_error() {
         let dir = std::env::temp_dir();
         let path = dir.join("oboros_test_bad_size.json");
-        let json = r#"{"version":1,"summary":{"cycles_reported":1,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":3,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
+        let json = r#"{"version":2,"summary":{"cycles_reported":1,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":3,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
         std::fs::write(&path, json).unwrap();
         let result = load_json_report(&path);
         assert!(result.is_err());
@@ -1510,7 +1475,7 @@ mod tests {
     fn load_non_sequential_cycle_index_returns_error() {
         let dir = std::env::temp_dir();
         let path = dir.join("oboros_test_bad_index.json");
-        let json = r#"{"version":1,"summary":{"cycles_reported":1,"cycles_suppressed":0},"cycles":[{"index":7,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
+        let json = r#"{"version":2,"summary":{"cycles_reported":1,"cycles_suppressed":0},"cycles":[{"index":7,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
         std::fs::write(&path, json).unwrap();
         let result = load_json_report(&path);
         assert!(result.is_err());
@@ -1521,12 +1486,12 @@ mod tests {
     fn load_valid_json() {
         let dir = std::env::temp_dir();
         let path = dir.join("oboros_test_valid.json");
-        let json = r#"{"version":1,"summary":{"cycles_reported":1,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
+        let json = r#"{"version":2,"summary":{"cycles_reported":1,"cycles_suppressed":0},"cycles":[{"index":1,"packages":["auth"],"size":2,"files":[{"path":"auth/a.py","import_lines":[],"edges":[]},{"path":"auth/b.py","import_lines":[],"edges":[]}]}]}"#;
         std::fs::write(&path, json).unwrap();
         let result = load_json_report(&path);
         assert!(result.is_ok());
         let report = result.unwrap();
-        assert_eq!(report.version, 1);
+        assert_eq!(report.version, 2);
         assert_eq!(report.summary.cycles_reported, 1);
         assert_eq!(report.cycles.len(), 1);
         assert_eq!(report.cycles[0].packages, vec!["auth"]);
@@ -1536,7 +1501,7 @@ mod tests {
     fn html_contains_title() {
         let report = make_report(vec![], 0);
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(html.contains("Circular Import Report"));
     }
 
@@ -1544,7 +1509,7 @@ mod tests {
     fn html_is_self_contained() {
         let report = make_report(vec![], 0);
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(html.contains("<!DOCTYPE html>"));
         assert!(html.contains("<style>"));
         assert!(html.contains("<script>"));
@@ -1560,7 +1525,7 @@ mod tests {
             3,
         );
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(html.contains(">1<"));
         assert!(html.contains(">3<"));
         assert!(html.contains(">2<"));
@@ -1573,7 +1538,7 @@ mod tests {
             0,
         );
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(html.contains("auth"));
     }
 
@@ -1584,7 +1549,7 @@ mod tests {
             0,
         );
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(html.contains("pkg/foo.py"));
         assert!(html.contains("pkg/bar.py"));
     }
@@ -1596,7 +1561,7 @@ mod tests {
             0,
         );
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(html.contains("&lt;script&gt;"));
         assert!(html.contains("b&amp;c.py"));
         assert!(!html.contains("<script>/a.py"));
@@ -1606,7 +1571,7 @@ mod tests {
     fn html_empty_report_has_table_headers() {
         let report = make_report(vec![], 0);
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(html.contains("Package Frequency"));
         assert!(html.contains("Cycle Size Distribution"));
         assert!(html.contains("All Cycles"));
@@ -1647,7 +1612,7 @@ mod tests {
         };
 
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(
             html.contains("Cycle Impact"),
             "HTML should contain Cycle Impact section"
@@ -1666,7 +1631,7 @@ mod tests {
     fn html_without_traced_has_no_cycle_impact_section() {
         let report = make_report(vec![], 0);
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(
             !html.contains("Cycle Impact"),
             "HTML should NOT contain Cycle Impact section when traced is empty"
@@ -1688,7 +1653,7 @@ mod tests {
             cyclic_files: vec!["pkg/a.py".to_string(), "pkg/b.py".to_string()],
         };
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(
             html.contains("Known Cyclic Files"),
             "HTML should contain Known Cyclic Files section"
@@ -1709,7 +1674,7 @@ mod tests {
     fn html_without_cyclic_files_has_no_section() {
         let report = make_report(vec![], 0);
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(
             !html.contains("Known Cyclic Files"),
             "HTML should NOT contain Known Cyclic Files section when cyclic_files is empty"
@@ -1723,7 +1688,7 @@ mod tests {
             0,
         );
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(html.contains("class=\"sortable\""));
         assert!(html.contains("data-sort-type=\"number\""));
     }
@@ -1735,7 +1700,7 @@ mod tests {
             0,
         );
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(html.contains("id=\"pkg-search\""));
         assert!(html.contains("Filter by package"));
         assert!(html.contains("id=\"cycles-table\""));
@@ -1752,7 +1717,7 @@ mod tests {
             0,
         );
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(html.contains("data-packages=\"auth,models\""));
     }
 
@@ -1774,7 +1739,7 @@ mod tests {
             cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(html.contains("L5, L12"));
         assert!(html.contains("L3"));
     }
@@ -1799,7 +1764,7 @@ mod tests {
             cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(html.contains("diff-view"));
         assert!(html.contains("diff-header"));
         assert!(html.contains("diff-line"));
@@ -1813,7 +1778,7 @@ mod tests {
             0,
         );
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[], "");
+        let html = generate_html(&report, &stats, None, "");
         assert!(html.contains("diff-empty"));
         assert!(html.contains("no outgoing imports in cycle"));
     }
@@ -1847,7 +1812,7 @@ mod tests {
             cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, std::slice::from_ref(&dir), "");
+        let html = generate_html(&report, &stats, Some(dir.as_path()), "");
         assert!(html.contains("from auth.b import handler"));
         assert!(html.contains("diff-code"));
     }
@@ -1860,12 +1825,9 @@ mod tests {
             "oboros_test_source_fallback_{}",
             std::process::id()
         ));
-        let first_root = base.join("first");
         let second_root = base.join("second");
         let _ = fs::remove_dir_all(&base);
-        fs::create_dir_all(first_root.join("auth")).unwrap();
         fs::create_dir_all(second_root.join("auth")).unwrap();
-        fs::write(first_root.join("auth/a.py"), "# too short\n").unwrap();
         fs::write(
             second_root.join("auth/a.py"),
             "# line 1\n# line 2\nfrom auth.b import handler\n",
@@ -1890,7 +1852,7 @@ mod tests {
             cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[first_root, second_root], "");
+        let html = generate_html(&report, &stats, Some(second_root.as_path()), "");
 
         assert!(html.contains("from auth.b import handler"));
         assert!(html.contains("diff-code"));
@@ -1919,7 +1881,7 @@ mod tests {
             cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, &[fake_root], "");
+        let html = generate_html(&report, &stats, Some(fake_root.as_path()), "");
         assert!(html.contains("L5"));
         assert!(html.contains("auth/b.py"));
     }
@@ -1957,7 +1919,7 @@ mod tests {
             cyclic_files: vec![],
         };
         let stats = ReportStats::from_report(&report);
-        let html = generate_html(&report, &stats, std::slice::from_ref(&dir), "");
+        let html = generate_html(&report, &stats, Some(dir.as_path()), "");
         assert!(html.contains("InvoiceManager"));
         assert!(html.contains("LineManager"));
         assert!(html.contains("from billing.managers import"));

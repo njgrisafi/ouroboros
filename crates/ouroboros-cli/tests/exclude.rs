@@ -34,7 +34,7 @@ fn basic_excluded_but_reachable_still_reported() {
         "--format",
         "json",
         "--exclude",
-        "app/b.py",
+        "src/app/b.py",
     ]);
     let cycles = parsed["cycles"].as_array().unwrap();
     assert_eq!(cycles.len(), 1, "cycle should still be reported");
@@ -70,12 +70,12 @@ fn unreachable_excluded_cycle_pruned() {
         "--format",
         "json",
         "--exclude",
-        "extra/",
+        "src/extra/",
     ]);
     let cycles_with = with_excl["cycles"].as_array().unwrap();
     assert!(
         cycles_with.is_empty(),
-        "extra cycle should be pruned with --exclude extra/"
+        "extra cycle should be pruned with --exclude src/extra/"
     );
 }
 
@@ -90,7 +90,7 @@ fn excluded_dir_with_ancestor_init_reachable() {
         "--format",
         "json",
         "--exclude",
-        "svc/",
+        "src/svc/",
     ]);
     // The important thing: no crash, and svc files appear in cycles or are traceable
     // (they're reachable from app/main.py which imports svc.mod)
@@ -106,9 +106,9 @@ fn excluded_dir_with_ancestor_init_reachable() {
         "--format",
         "json",
         "--exclude",
-        "svc/",
+        "src/svc/",
         "--trace",
-        "svc/mod.py",
+        "src/svc/mod.py",
     ]);
     // svc/mod.py is reachable from app/main.py, so it should NOT be an unknown path
     let unknown = trace_result["unknown_paths"].as_array();
@@ -134,7 +134,7 @@ fn selfloop_reachable_retained() {
         "--format",
         "json",
         "--exclude",
-        "app/s.py",
+        "src/app/s.py",
     ]);
     let cycles = parsed["cycles"].as_array().unwrap();
     assert_eq!(cycles.len(), 1, "self-loop cycle should still be reported");
@@ -187,9 +187,9 @@ fn trace_excluded_unreachable_is_unknown_path() {
         "--format",
         "json",
         "--exclude",
-        "extra/",
+        "src/extra/",
         "--trace",
-        "extra/x.py",
+        "src/extra/x.py",
     ]);
     let unknown = parsed["unknown_paths"].as_array().unwrap();
     assert!(
@@ -219,7 +219,7 @@ fn strict_suppressed_by_exclude() {
         cfg.to_str().unwrap(),
         "--strict",
         "--exclude",
-        "extra/",
+        "src/extra/",
     ]);
     assert_eq!(
         with_excl.status.code().unwrap(),
@@ -237,9 +237,9 @@ fn strict_trace_excluded_unreachable_exits_zero() {
         cfg.to_str().unwrap(),
         "--strict",
         "--exclude",
-        "extra/",
+        "src/extra/",
         "--trace",
-        "extra/x.py",
+        "src/extra/x.py",
     ]);
     assert_eq!(output.status.code().unwrap(), 0);
 }
@@ -271,7 +271,7 @@ fn dump_ignores_reflects_pruned_graph() {
         "json",
         "--dump-ignores",
         "--exclude",
-        "extra/",
+        "src/extra/",
     ]);
     let entries_with = with_excl["ignore_entries"].as_array().unwrap();
     assert!(
@@ -292,7 +292,7 @@ fn package_with_exclude() {
         "json",
         "--package",
         "--exclude",
-        "extra/",
+        "src/extra/",
     ]);
     let cycles = parsed["cycles"].as_array().unwrap();
     assert!(
@@ -315,7 +315,7 @@ fn cli_config_union() {
         "--format",
         "json",
         "--exclude",
-        "app/b.py",
+        "src/app/b.py",
     ]);
     // extra/ cycle should be gone (from config exclude)
     let cycles = parsed["cycles"].as_array().unwrap();
@@ -350,7 +350,7 @@ fn space_padded_comma_cli() {
         "--format",
         "json",
         "--exclude",
-        "extra/x.py,extra/y.py",
+        "src/extra/x.py,src/extra/y.py",
     ]);
     let cycles = parsed["cycles"].as_array().unwrap();
     assert!(
@@ -369,7 +369,7 @@ fn json_excluded_field_present() {
         "--format",
         "json",
         "--exclude",
-        "extra/",
+        "src/extra/",
     ]);
     let excluded = parsed["excluded"].as_array().unwrap();
     assert!(
