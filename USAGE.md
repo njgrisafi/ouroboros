@@ -151,7 +151,7 @@ When `--check-lazy` is passed, oboros analyzes the project *as if every import w
 
 Under lazy imports, a module's body executes only on first use of the imported name. An existing import cycle that was benign under eager imports can become a runtime `AttributeError` ("partially initialized module") if a module *dereferences* a cyclic import **at module-initialization time** — in top-level code, class bodies, decorators, base classes, or default argument values.
 
-`--check-lazy` does **not** hide anything the default report shows. It filters the import cycles to the lazy-dangerous subset (init-use SCCs ⊆ import SCCs) and annotates each edge with its **blocker** — the exact init-time use site and context.
+`--check-lazy` does **not** hide anything the default report shows. It filters the import cycles to the lazy-dangerous strict subset (init-use SCCs ⊆ import SCCs) and annotates each edge with its **blocker** — the exact init-time use site and context.
 
 **Without** `--check-lazy`: output is exactly today's import-cycle report (unchanged).
 
