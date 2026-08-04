@@ -124,6 +124,18 @@ struct Cli {
     /// [resolve] include-self-ancestor-init.
     #[arg(long = "include-self-ancestor-init")]
     include_self_ancestor_init: bool,
+
+    /// Include imports nested inside functions, methods, classes, and
+    /// control-flow blocks (deferred/"local" imports), not just top-level ones.
+    /// Opt-in; default off. Overrides [parse] local-imports.
+    #[arg(long = "local-imports")]
+    local_imports: bool,
+
+    /// Analyze the project as if all imports are lazy (PEP 810 / -X lazy_imports=all)
+    /// and report only the cycles that would break as partial-initialization failures.
+    /// Overrides the normal import-cycle graph with the init-time-use graph.
+    #[arg(long = "check-lazy")]
+    check_lazy: bool,
 }
 
 /// Walk upward from `start` looking for `oboros.toml`.
@@ -239,6 +251,24 @@ fn main() {
     }
     let write_config_path: Option<PathBuf> = config_path.clone();
 
+    if cli.check_lazy {
+        if cli.dump_cyclic_files || cli.check_cyclic_files || cli.dump_ignores || cli.write {
+            eprintln!(
+                "error: --check-lazy cannot be combined with --dump-cyclic-files, --check-cyclic-files, --dump-ignores, or --write"
+            );
+            std::process::exit(2);
+        }
+        if cli.local_imports {
+            eprintln!("warning: --local-imports has no effect with --check-lazy");
+        }
+        if cli.no_include_ancestor_init {
+            eprintln!("warning: --no-include-ancestor-init has no effect with --check-lazy");
+        }
+        if cli.include_self_ancestor_init {
+            eprintln!("warning: --include-self-ancestor-init has no effect with --check-lazy");
+        }
+    }
+
     let is_human = matches!(cli.format, OutputFormat::Human);
     let verbose = is_human && cli.verbose;
     let spinner = make_spinner(is_human && !cli.verbose);
@@ -275,6 +305,10 @@ fn main() {
 
     if cli.include_self_ancestor_init {
         config.resolve.include_self_ancestor_init = true;
+    }
+
+    if cli.local_imports {
+        config.parse.local_imports = true;
     }
 
     // Not gated on cyclic_surface_active: this flag affects the main cycle
@@ -406,7 +440,22 @@ fn main() {
     spinner.set_message("Building dependency graph...");
     let mut graph_result = graph::build_file_dependency_graph(&discovery_result, &resolve_result);
 
-    if config.resolve.include_ancestor_init && config.resolve.include_self_ancestor_init {
+    // --check-lazy analyzes lazy-realization cycles: swap in the init-time-use graph
+    // for all downstream consumers and skip ancestor-init restore (irrelevant here).
+    let lazy_blocker_contexts = if cli.check_lazy {
+        let lazy_result =
+            ouroboros_core::usage::analyze_lazy(&discovery_result, &index, &project_root);
+        graph_result.graph = lazy_result.graph;
+        graph_result.edge_metadata = lazy_result.edge_metadata;
+        Some(lazy_result.blocker_contexts)
+    } else {
+        None
+    };
+
+    if !cli.check_lazy
+        && config.resolve.include_ancestor_init
+        && config.resolve.include_self_ancestor_init
+    {
         // Build an owned module->path map. PathBuf values MUST be rel_path
         // (project-root-relative) — the graph is keyed on rel_path (build.rs:57,64).
         // Iterate roots/files in the same order as build_file_dependency_graph
@@ -783,7 +832,14 @@ fn main() {
 
     match cli.format {
         OutputFormat::Human => {
-            println!("\n--- dependency cycles ({}) ---", cycles.len());
+            if cli.check_lazy {
+                println!(
+                    "\n--- lazy-import realization cycles ({}) ---",
+                    cycles.len()
+                );
+            } else {
+                println!("\n--- dependency cycles ({}) ---", cycles.len());
+            }
             if ignore_list_suppressed > 0 {
                 println!(
                     "({} cycles suppressed by ignore list)",
@@ -841,7 +897,40 @@ fn main() {
                     let import_lines =
                         output::collect_import_lines(path, cycle, &graph_result.edge_metadata);
 
-                    if import_lines.is_empty() {
+                    if cli.check_lazy {
+                        let context = lazy_blocker_contexts.as_ref().and_then(|ctxs| {
+                            cycle
+                                .iter()
+                                .filter(|other| *other != path)
+                                .find_map(|other| {
+                                    ctxs.get(&(path.clone(), other.clone()))
+                                        .and_then(|v| v.first())
+                                        .map(output::stringify_context)
+                                })
+                        });
+                        let line_strs: Vec<String> =
+                            import_lines.iter().map(|l| l.to_string()).collect();
+                        match (line_strs.as_slice(), context) {
+                            ([], _) => println!("  {}", path.display()),
+                            ([line], Some(ctx)) => {
+                                println!("  {} (blocker at line {}, {})", path.display(), line, ctx)
+                            }
+                            ([line], None) => {
+                                println!("  {} (blocker at line {})", path.display(), line)
+                            }
+                            (lines, Some(ctx)) => println!(
+                                "  {} (blockers at lines {}, {})",
+                                path.display(),
+                                lines.join(", "),
+                                ctx
+                            ),
+                            (lines, None) => println!(
+                                "  {} (blockers at lines {})",
+                                path.display(),
+                                lines.join(", ")
+                            ),
+                        }
+                    } else if import_lines.is_empty() {
                         println!("  {}", path.display());
                     } else if import_lines.len() == 1 {
                         println!("  {} (import at line {})", path.display(), import_lines[0]);
@@ -958,6 +1047,12 @@ fn main() {
                         vec![]
                     },
                     source_roots: &config.source_roots,
+                    blocker_contexts: lazy_blocker_contexts,
+                    analysis: if cli.check_lazy {
+                        Some("lazy".to_string())
+                    } else {
+                        None
+                    },
                 },
             );
             println!("{}", serde_json::to_string_pretty(&report).unwrap());

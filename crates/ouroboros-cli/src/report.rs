@@ -164,9 +164,18 @@ pub fn generate_html(
     let mut html = String::with_capacity(32768);
     let date = Local::now().format("%Y-%m-%d").to_string();
 
+    let is_lazy = report.analysis.as_deref() == Some("lazy");
+
     write_head(&mut html, &date);
-    write_nav(&mut html, stats, &report.traced, &report.cyclic_files);
+    write_nav(
+        &mut html,
+        stats,
+        &report.traced,
+        &report.cyclic_files,
+        is_lazy,
+    );
     write_summary(&mut html, stats);
+    write_lazy_blockers_section(&mut html, report, project_root);
     write_package_table(&mut html, &stats.package_frequency);
     write_size_table(&mut html, &stats.size_distribution);
     write_cycle_table(&mut html, &report.cycles, project_root);
@@ -361,6 +370,17 @@ fn write_head(html: &mut String, date: &str) {
             display: inline-block; background: #e8e8f8; color: #4a4ae0;
             border-radius: 3px; padding: 0.1rem 0.45rem; font-size: 0.72rem; font-weight: 600;
         }
+        /* lazy blockers */
+        .lazy-intro { color: #555; font-size: 0.9rem; margin-bottom: 1rem; }
+        .lazy-intro code { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.8rem; background: #eee; border-radius: 3px; padding: 0.05rem 0.3rem; }
+        .lazy-cycle { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); padding: 0.5rem 1rem; margin-bottom: 1rem; }
+        .lazy-blocker { padding: 0.5rem 0; border-bottom: 1px solid #f0f0f0; }
+        .lazy-blocker:last-child { border-bottom: none; }
+        .lazy-loc { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.8rem; color: #1a1a2e; }
+        .lazy-lineno { color: #888; }
+        .lazy-ctx { display: inline-block; background: #fff0e0; color: #a05000; border-radius: 3px; padding: 0.05rem 0.4rem; font-size: 0.72rem; margin-left: 0.4rem; }
+        .lazy-code { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.8rem; color: #b5852a; margin: 0.2rem 0 0.1rem 1rem; }
+        .lazy-target { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.8rem; color: #2a7a2a; margin-left: 1rem; }
     </style>
 </head>
 <body>
@@ -379,11 +399,17 @@ fn write_nav(
     stats: &ReportStats,
     traced: &[crate::output::JsonTrace],
     cyclic_files: &[String],
+    is_lazy: bool,
 ) {
     html.push_str("    <nav class=\"toc\">\n");
     html.push_str("        <div class=\"toc-title\">Jump to</div>\n");
     html.push_str("        <ul class=\"toc-list\">\n");
     html.push_str("            <li><a href=\"#summary\">Summary</a></li>\n");
+    if is_lazy {
+        html.push_str(
+            "            <li><a href=\"#lazy-blockers\">Lazy import realization</a></li>\n",
+        );
+    }
     if !stats.package_frequency.is_empty() {
         html.push_str("            <li><a href=\"#pkg-freq\">Package Frequency</a></li>\n");
     }
@@ -414,6 +440,72 @@ fn write_summary(html: &mut String, stats: &ReportStats) {
 "#,
         stats.total_cycles, stats.total_suppressed, stats.total_files
     );
+}
+
+fn write_lazy_blockers_section(
+    html: &mut String,
+    report: &JsonReport,
+    project_root: Option<&Path>,
+) {
+    if report.analysis.as_deref() != Some("lazy") {
+        return;
+    }
+
+    let mut source_lines = SourceLineCache::new(project_root.map(|p| p.to_path_buf()));
+
+    html.push_str("    <span id=\"lazy-blockers\" class=\"section-anchor\"></span>\n");
+    html.push_str("\n    <h2>Lazy import realization</h2>\n");
+    html.push_str(
+        "    <p class=\"lazy-intro\">These cycles survive lazy-import analysis (PEP 810 / <code>-X lazy_imports=all</code>). Each blocker below is an init-time use of an imported module that forces it to execute before the importing module finishes loading.</p>\n",
+    );
+
+    for cycle in &report.cycles {
+        let mut body = String::new();
+        for file in &cycle.files {
+            for edge in &file.edges {
+                let Some(ctx) = edge.blocker_context.as_deref() else {
+                    continue;
+                };
+                for &line_num in &edge.lines {
+                    let source_text = source_lines.read_source_line(&file.path, line_num);
+                    body.push_str("            <div class=\"lazy-blocker\">");
+                    let _ = write!(
+                        body,
+                        "<div class=\"lazy-loc\">{}<span class=\"lazy-lineno\">:{}</span> <span class=\"lazy-ctx\">{}</span></div>",
+                        html_escape(&file.path),
+                        line_num,
+                        html_escape(ctx)
+                    );
+                    if let Some(code) = source_text {
+                        let _ = write!(
+                            body,
+                            "<div class=\"lazy-code\">{}</div>",
+                            html_escape(&code)
+                        );
+                    }
+                    let _ = write!(
+                        body,
+                        "<div class=\"lazy-target\">&rarr; {}</div>",
+                        html_escape(&edge.to)
+                    );
+                    body.push_str("</div>\n");
+                }
+            }
+        }
+        if body.is_empty() {
+            continue;
+        }
+        let _ = writeln!(
+            html,
+            "    <h3>Cycle {} <span class=\"cycle-count-badge\">{} file{}</span></h3>",
+            cycle.index,
+            cycle.size,
+            if cycle.size == 1 { "" } else { "s" }
+        );
+        html.push_str("    <div class=\"lazy-cycle\">\n");
+        html.push_str(&body);
+        html.push_str("    </div>\n");
+    }
 }
 
 fn write_package_table(html: &mut String, package_frequency: &[(String, usize)]) {
@@ -1264,6 +1356,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         }
     }
 
@@ -1609,6 +1702,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
 
         let stats = ReportStats::from_report(&report);
@@ -1651,6 +1745,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec!["pkg/a.py".to_string(), "pkg/b.py".to_string()],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, None, "");
@@ -1737,6 +1832,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, None, "");
@@ -1748,6 +1844,7 @@ mod tests {
     fn html_has_diff_view() {
         let mut cycle = make_cycle(1, &["auth"], &["auth/a.py", "auth/b.py"]);
         cycle.files[0].edges = vec![crate::output::JsonEdge {
+            blocker_context: None,
             to: "auth/b.py".to_string(),
             lines: vec![5],
         }];
@@ -1762,6 +1859,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, None, "");
@@ -1796,6 +1894,7 @@ mod tests {
 
         let mut cycle = make_cycle(1, &["auth"], &["auth/a.py", "auth/b.py"]);
         cycle.files[0].edges = vec![crate::output::JsonEdge {
+            blocker_context: None,
             to: "auth/b.py".to_string(),
             lines: vec![5],
         }];
@@ -1810,6 +1909,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, Some(dir.as_path()), "");
@@ -1836,6 +1936,7 @@ mod tests {
 
         let mut cycle = make_cycle(1, &["auth"], &["auth/a.py", "auth/b.py"]);
         cycle.files[0].edges = vec![crate::output::JsonEdge {
+            blocker_context: None,
             to: "auth/b.py".to_string(),
             lines: vec![3],
         }];
@@ -1850,6 +1951,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, Some(second_root.as_path()), "");
@@ -1865,6 +1967,7 @@ mod tests {
 
         let mut cycle = make_cycle(1, &["auth"], &["auth/a.py", "auth/b.py"]);
         cycle.files[0].edges = vec![crate::output::JsonEdge {
+            blocker_context: None,
             to: "auth/b.py".to_string(),
             lines: vec![5],
         }];
@@ -1879,6 +1982,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, Some(fake_root.as_path()), "");
@@ -1903,6 +2007,7 @@ mod tests {
             &["billing/__init__.py", "billing/managers.py"],
         );
         cycle.files[0].edges = vec![crate::output::JsonEdge {
+            blocker_context: None,
             to: "billing/managers.py".to_string(),
             lines: vec![1],
         }];
@@ -1917,6 +2022,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, Some(dir.as_path()), "");

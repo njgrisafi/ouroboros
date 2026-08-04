@@ -5,7 +5,7 @@
 The binary is called `oboros`. Usage:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--include-self-ancestor-init] [--strict] [--no-include-ancestor-init] [--exclude <PATH>] [--write]
+oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--include-self-ancestor-init] [--local-imports] [--check-lazy] [--strict] [--no-include-ancestor-init] [--exclude <PATH>] [--write]
 ```
 
 | Flag | Description |
@@ -19,6 +19,8 @@ oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--d
 | `--show-cyclic-files` | Include the cyclic-files set as an optional top-level `cyclic_files` array in the JSON report. No-op in human mode. |
 | `--ignore-derived-ancestor-init` | Exclude files that are cyclic only via a derived ancestor-`__init__.py` edge from the known-cyclic-files baseline. Overrides `[cycles] ignore-derived-ancestor-init` in config. Baseline-only; does not affect the normal cycle report. |
 | `--include-self-ancestor-init` | Detect cycles that close through an eager parent `__init__.py`. Overrides `[resolve] include-self-ancestor-init` in config. See [`[resolve]` section](#resolve-section). |
+| `--local-imports` | Include imports nested inside functions, methods, classes, and control-flow blocks (deferred/"local" imports), not just top-level ones. Overrides `[parse] local-imports` in config. See [`[parse]` section](#parse-section). |
+| `--check-lazy` | Analyze the project as if all imports are lazy (PEP 810 / `-X lazy_imports=all`) and report only the cycles that would break as partial-initialization failures. Overrides the normal import-cycle graph with the init-time-use graph. See [Lazy import realization](#lazy-import-realization---check-lazy). |
 | `--strict` | Exit with code 1 if any (non-suppressed) cycles are detected. When `--trace` is also present, exits 1 only if the union of impacting cycles across all traced paths is non-empty. Works with both output formats. |
 | `--no-include-ancestor-init` | Disable ancestor-package `__init__.py` edges. Overrides `include-ancestor-init` in config. See [`[resolve]` section](#resolve-section). |
 | `--trace <PATH>`, `-t <PATH>` | Report cycles that impact the given file or directory path(s), relative to the project root. Repeatable and/or comma-separated. When omitted, output is identical to today. See [Cycle impact](#cycle-impact---trace). |
@@ -101,6 +103,8 @@ Setting `local-imports = true` is useful when your codebase uses deferred import
 local-imports = true
 ```
 
+You can also enable this for a single run without editing the config by passing `--local-imports` on the CLI. The flag forces the option on and takes precedence over the config value (which defaults to `false`).
+
 #### `[resolve]` section
 
 Controls how resolved imports are turned into dependency edges.
@@ -140,6 +144,68 @@ include-self-ancestor-init = true
 **Interaction with `ignore-derived-ancestor-init`:** Newly surfaced cycles are ancestor-init-derived and can be grandfathered via `ignore-derived-ancestor-init` or suppressed via `[[cycles.ignore]]` / `known-cyclic-files`.
 
 **`min-scc-size` caveat:** Surfaced cycles are subject to `[cycles] min-scc-size` (default 2). Newly-surfaced self-tree init cycles are typically 2 files, so `min-scc-size ≥ 3` will hide them. If the flag appears to have no effect, check this setting.
+
+### Lazy import realization (`--check-lazy`)
+
+When `--check-lazy` is passed, oboros analyzes the project *as if every import were lazy* — equivalent to Python 3.15's `-X lazy_imports=all` (PEP 810) — and reports the **subset** of import cycles that would break as **partial-initialization failures**.
+
+Under lazy imports, a module's body executes only on first use of the imported name. An existing import cycle that was benign under eager imports can become a runtime `AttributeError` ("partially initialized module") if a module *dereferences* a cyclic import **at module-initialization time** — in top-level code, class bodies, decorators, base classes, or default argument values.
+
+`--check-lazy` does **not** hide anything the default report shows. It filters the import cycles to the lazy-dangerous strict subset (init-use SCCs ⊆ import SCCs) and annotates each edge with its **blocker** — the exact init-time use site and context.
+
+**Without** `--check-lazy`: output is exactly today's import-cycle report (unchanged).
+
+**With** `--check-lazy`: only cycles that remain when non-init-time-dereference edges are dropped are reported, each annotated with the blocker line and context.
+
+#### Composing with other flags
+
+`--check-lazy` composes with:
+- `--trace <PATH>` — shows which lazy cycles impact a path, with the blocker chain
+- `--format json` — JSON output includes `"analysis": "lazy"` and per-edge `"blocker_context"`
+- `--strict` — exits 1 if any lazy-realization cycles are detected
+- `oboros report` — the HTML report shows a "Lazy import realization" label and the blocker source line
+
+`--check-lazy` is **incompatible** with `--dump-cyclic-files`, `--check-cyclic-files`, `--dump-ignores`, and `--write` (exits 2 if combined).
+
+#### Known limitations (false positives / false negatives)
+
+**False positives (over-reporting):**
+- No statement-ordering analysis: a reported cycle can be safe if the needed attribute is defined before the cyclic dereference fires. Reported cycles are a **risk signal, not proof** of failure.
+
+**False negatives (under-reporting):**
+- Dereferences hidden behind top-level calls to same-module helper functions
+- `getattr()`, `importlib`, dynamic imports, `__getattr__`
+- Star imports (`from x import *`)
+- Complex `__init__.py` re-export chains
+- Annotations (excluded; PEP 563/649 defer them)
+- `if TYPE_CHECKING:` blocks (skipped)
+- Imports declared inside class bodies or control-flow blocks are not bound (matching oboros's default `--local-imports`-off behavior)
+
+**`import a.b.c` bare-root limitation:** a use of bare `a` (or a chain diverging from `a.b.c`) produces no edge; only a use whose attribute chain has `a.b.c` as a prefix produces the edge.
+
+#### Example
+
+```python
+# serializers.py
+import models
+
+class UserSerializer:
+    class Meta:
+        model = models.User  # ← blocker: init-time dereference in class body
+```
+
+```
+$ oboros --check-lazy
+--- lazy-import realization cycles (1) ---
+cycle 1 (3 files)
+  models.py (blocker at line 1, module-body)
+  serializers.py (blocker at line 7, class-body)
+  views.py (blocker at line 4, class-body)
+```
+
+#### Python 3.15 / PEP 810
+
+This flag models the behavior of Python 3.15's explicit lazy imports ([PEP 810](https://peps.python.org/pep-0810/)) under the global `-X lazy_imports=all` mode. The PEP's own FAQ states: "Lazy imports don't automatically solve circular import problems. If two modules have a circular dependency, making the imports lazy might help **only if** the circular reference isn't accessed during module initialization."
 
 #### `[cycles]` section
 
