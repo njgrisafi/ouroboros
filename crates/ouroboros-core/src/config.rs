@@ -83,6 +83,12 @@ pub struct ResolveConfig {
     /// eager parent `__init__.py`. Defaults to `true`.
     #[serde(rename = "include-ancestor-init", default = "default_true")]
     pub include_ancestor_init: bool,
+
+    /// Restore suppressed self/in-tree ancestor-init edges that close a cycle
+    /// (e.g. `P/__init__.py -> P.child -> P`). Opt-in; defaults to `false`.
+    /// Has no effect when `include-ancestor-init` is disabled.
+    #[serde(rename = "include-self-ancestor-init", default)]
+    pub include_self_ancestor_init: bool,
 }
 
 fn default_true() -> bool {
@@ -93,6 +99,7 @@ impl Default for ResolveConfig {
     fn default() -> Self {
         ResolveConfig {
             include_ancestor_init: true,
+            include_self_ancestor_init: false,
         }
     }
 }
@@ -383,6 +390,34 @@ source-roots = ["src"]
 "#;
         let config = Config::from_toml(toml_str).unwrap();
         assert!(config.resolve.include_ancestor_init);
+    }
+
+    #[test]
+    fn include_self_ancestor_init_defaults_to_false() {
+        let config = Config::default();
+        assert!(!config.resolve.include_self_ancestor_init);
+    }
+
+    #[test]
+    fn resolve_section_can_enable_self_ancestor_init() {
+        let toml = r#"
+source-roots = ["."]
+[resolve]
+include-self-ancestor-init = true
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        assert!(config.resolve.include_self_ancestor_init);
+    }
+
+    #[test]
+    fn include_self_ancestor_init_omitted_defaults_false() {
+        let toml = r#"
+source-roots = ["."]
+[resolve]
+include-ancestor-init = true
+"#;
+        let config = Config::from_toml(toml).unwrap();
+        assert!(!config.resolve.include_self_ancestor_init);
     }
 
     #[test]
