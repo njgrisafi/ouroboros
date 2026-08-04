@@ -29,6 +29,21 @@ pub struct ResolvedDep {
     pub line: u32,
 }
 
+/// An in-tree ancestor-package edge dropped from [`ResolvedDep`] output by the
+/// ancestor-or-self guard.
+///
+/// When the ancestor package is a proper ancestor of the importing module, its
+/// `__init__.py` is already on the import stack, so no dependency edge is
+/// emitted. Recording the suppressed edge lets downstream analysis reason about
+/// ancestor-init relationships without changing the dependency graph. Only
+/// proper ancestors are recorded; the self prefix is never recorded.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SuppressedAncestorEdge {
+    pub source: String,
+    pub ancestor_package: String,
+    pub line: u32,
+}
+
 /// An import that could not be resolved to a first-party module.
 ///
 /// These are typically stdlib or third-party imports, but may also be
@@ -48,6 +63,8 @@ pub struct FileResolution {
     pub deps: Vec<ResolvedDep>,
     /// Imports that did not match any first-party module.
     pub unresolved: Vec<UnresolvedImport>,
+    /// In-tree ancestor-package edges dropped by the ancestor-or-self guard.
+    pub suppressed_ancestor_edges: Vec<SuppressedAncestorEdge>,
 }
 
 /// Aggregated, deduplicated resolution results for the whole project.
@@ -57,6 +74,8 @@ pub struct ResolveResult {
     pub deps: Vec<ResolvedDep>,
     /// All imports that could not be resolved to first-party modules.
     pub unresolved: Vec<UnresolvedImport>,
+    /// Deduplicated in-tree ancestor-package edges dropped by the guard.
+    pub suppressed_ancestor_edges: Vec<SuppressedAncestorEdge>,
 }
 
 /// Resolve imports from a single file against the first-party module index.
@@ -97,6 +116,7 @@ pub fn resolve_all(
     let include_ancestor_init = config.resolve.include_ancestor_init;
     let mut all_deps = Vec::new();
     let mut all_unresolved = Vec::new();
+    let mut all_suppressed = Vec::new();
 
     for root in &discovery.roots {
         for file in &root.files {
@@ -125,6 +145,7 @@ pub fn resolve_all(
             );
             all_deps.extend(resolution.deps);
             all_unresolved.extend(resolution.unresolved);
+            all_suppressed.extend(resolution.suppressed_ancestor_edges);
         }
     }
 
@@ -146,8 +167,14 @@ pub fn resolve_all(
     });
     all_unresolved.dedup();
 
+    // Dedup is on the full (source, ancestor_package, line) triple by design:
+    // the same ancestor package suppressed at different lines is preserved.
+    all_suppressed.sort();
+    all_suppressed.dedup();
+
     ResolveResult {
         deps: all_deps,
         unresolved: all_unresolved,
+        suppressed_ancestor_edges: all_suppressed,
     }
 }
