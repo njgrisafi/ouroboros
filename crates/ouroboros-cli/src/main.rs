@@ -130,6 +130,12 @@ struct Cli {
     /// Opt-in; default off. Overrides [parse] local-imports.
     #[arg(long = "local-imports")]
     local_imports: bool,
+
+    /// Analyze the project as if all imports are lazy (PEP 810 / -X lazy_imports=all)
+    /// and report only the cycles that would break as partial-initialization failures.
+    /// Overrides the normal import-cycle graph with the init-time-use graph.
+    #[arg(long = "check-lazy")]
+    check_lazy: bool,
 }
 
 /// Walk upward from `start` looking for `oboros.toml`.
@@ -244,6 +250,24 @@ fn main() {
         }
     }
     let write_config_path: Option<PathBuf> = config_path.clone();
+
+    if cli.check_lazy {
+        if cli.dump_cyclic_files || cli.check_cyclic_files || cli.dump_ignores || cli.write {
+            eprintln!(
+                "error: --check-lazy cannot be combined with --dump-cyclic-files, --check-cyclic-files, --dump-ignores, or --write"
+            );
+            std::process::exit(2);
+        }
+        if cli.local_imports {
+            eprintln!("warning: --local-imports has no effect with --check-lazy");
+        }
+        if cli.no_include_ancestor_init {
+            eprintln!("warning: --no-include-ancestor-init has no effect with --check-lazy");
+        }
+        if cli.include_self_ancestor_init {
+            eprintln!("warning: --include-self-ancestor-init has no effect with --check-lazy");
+        }
+    }
 
     let is_human = matches!(cli.format, OutputFormat::Human);
     let verbose = is_human && cli.verbose;
@@ -416,7 +440,19 @@ fn main() {
     spinner.set_message("Building dependency graph...");
     let mut graph_result = graph::build_file_dependency_graph(&discovery_result, &resolve_result);
 
-    if config.resolve.include_ancestor_init && config.resolve.include_self_ancestor_init {
+    // --check-lazy analyzes lazy-realization cycles: swap in the init-time-use graph
+    // for all downstream consumers and skip ancestor-init restore (irrelevant here).
+    if cli.check_lazy {
+        let lazy_result =
+            ouroboros_core::usage::analyze_lazy(&discovery_result, &index, &project_root);
+        graph_result.graph = lazy_result.graph;
+        graph_result.edge_metadata = lazy_result.edge_metadata;
+    }
+
+    if !cli.check_lazy
+        && config.resolve.include_ancestor_init
+        && config.resolve.include_self_ancestor_init
+    {
         // Build an owned module->path map. PathBuf values MUST be rel_path
         // (project-root-relative) — the graph is keyed on rel_path (build.rs:57,64).
         // Iterate roots/files in the same order as build_file_dependency_graph
