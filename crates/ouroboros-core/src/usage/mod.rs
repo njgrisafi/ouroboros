@@ -64,6 +64,15 @@ pub(crate) const fn use_context_rank(context: &UseContext) -> u8 {
     }
 }
 
+pub fn analyze_lazy(
+    discovery: &crate::discovery::DiscoveryResult,
+    index: &crate::resolver::index::ModuleIndex,
+    project_root: &std::path::Path,
+) -> crate::graph::build::InitUseGraphResult {
+    let edges = collect_init_use_edges(discovery, index, project_root);
+    crate::graph::build::build_init_use_graph(discovery, &edges)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
