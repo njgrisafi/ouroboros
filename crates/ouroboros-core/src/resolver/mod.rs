@@ -6,6 +6,7 @@
 //! from the discovery phase, and classifies each import as either a first-party
 //! dependency edge or an unresolved import (stdlib/third-party).
 
+pub(crate) mod binding;
 pub mod error;
 mod index;
 mod relative;
@@ -13,6 +14,9 @@ mod resolve;
 
 pub use error::ResolveError;
 pub use index::ModuleIndex;
+
+#[allow(unused_imports)]
+pub(crate) use binding::BindingTarget;
 
 use crate::config::Config;
 use crate::discovery::DiscoveryResult;
