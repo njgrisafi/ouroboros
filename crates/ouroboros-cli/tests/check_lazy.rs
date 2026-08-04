@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
@@ -7,6 +8,10 @@ fn binary() -> &'static str {
 
 fn fixture_config(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{name}/oboros.toml"))
+}
+
+fn fixture_dir(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/{name}"))
 }
 
 fn run_output(fixture: &str, extra_args: &[&str]) -> Output {
@@ -43,6 +48,42 @@ fn trace_relationships(parsed: &serde_json::Value) -> Vec<String> {
         .flat_map(|f| f["impacts"].as_array().into_iter().flatten())
         .map(|imp| imp["relationship"].as_str().unwrap().to_string())
         .collect()
+}
+
+fn unique_temp_dir(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("oboros_check_lazy_{tag}_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn generate_report(fixture: &str, check_lazy: bool, tag: &str) -> String {
+    let dir = fixture_dir(fixture);
+    let tmp = unique_temp_dir(tag);
+    let json_path = tmp.join("report.json");
+    let html_path = tmp.join("report.html");
+
+    let mut args = vec!["--format", "json"];
+    if check_lazy {
+        args.push("--check-lazy");
+    }
+    let output = run_output(fixture, &args);
+    fs::write(&json_path, &output.stdout).unwrap();
+
+    let status = Command::new(binary())
+        .args([
+            "report",
+            json_path.to_str().unwrap(),
+            "-o",
+            html_path.to_str().unwrap(),
+            "--root",
+            dir.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to run oboros report");
+    assert!(status.success(), "report subcommand must succeed");
+
+    fs::read_to_string(&html_path).unwrap()
 }
 
 #[test]
@@ -235,5 +276,27 @@ fn lazy_contexts_deferred_check_lazy_finds_no_cycle() {
     assert!(
         cycles(&parsed).is_empty(),
         "a deferred back-edge (method body) must not form a lazy cycle: {parsed}"
+    );
+}
+
+#[test]
+fn html_report_renders_lazy_blockers() {
+    let html = generate_report("lazy_basic", true, "lazy");
+    assert!(
+        html.contains("<h2>Lazy import realization</h2>"),
+        "lazy HTML report must render the lazy realization section"
+    );
+    assert!(
+        html.contains("model = models.User"),
+        "lazy HTML report must show the blocker source line"
+    );
+}
+
+#[test]
+fn html_report_omits_lazy_section_for_non_lazy_json() {
+    let html = generate_report("lazy_basic", false, "nonlazy");
+    assert!(
+        !html.contains("Lazy import realization"),
+        "non-lazy HTML report must not render the lazy realization section"
     );
 }
