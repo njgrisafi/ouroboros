@@ -3,7 +3,7 @@ use crate::parser::{ImportKind, RawImport};
 use super::error::ResolveError;
 use super::index::ModuleIndex;
 use super::relative::resolve_relative;
-use super::{FileResolution, ResolvedDep, UnresolvedImport};
+use super::{FileResolution, ResolvedDep, SuppressedAncestorEdge, UnresolvedImport};
 
 /// Resolve all imports from a single file against the first-party module index.
 ///
@@ -23,6 +23,7 @@ pub(crate) fn resolve_file_imports(
 ) -> FileResolution {
     let mut deps = Vec::new();
     let mut unresolved = Vec::new();
+    let mut suppressed = Vec::new();
 
     for imp in imports {
         match imp.kind {
@@ -34,6 +35,7 @@ pub(crate) fn resolve_file_imports(
                     &mut deps,
                     &mut unresolved,
                     include_ancestor_init,
+                    &mut suppressed,
                 );
             }
             ImportKind::ImportFrom => {
@@ -45,12 +47,17 @@ pub(crate) fn resolve_file_imports(
                     &mut unresolved,
                     include_ancestor_init,
                     source_is_package,
+                    &mut suppressed,
                 );
             }
         }
     }
 
-    FileResolution { deps, unresolved }
+    FileResolution {
+        deps,
+        unresolved,
+        suppressed_ancestor_edges: suppressed,
+    }
 }
 
 /// Returns `true` if `candidate` is `module` itself or one of its dotted-prefix
@@ -89,6 +96,7 @@ fn push_ancestor_package_deps(
     line: u32,
     index: &ModuleIndex,
     deps: &mut Vec<ResolvedDep>,
+    suppressed: &mut Vec<SuppressedAncestorEdge>,
 ) {
     let parts: Vec<&str> = target.split('.').collect();
     let mut prefix = String::new();
@@ -107,6 +115,15 @@ fn push_ancestor_package_deps(
                 target: prefix.clone(),
                 line,
             });
+        } else if is_ancestor_or_self(&prefix, source_module)
+            && prefix != source_module
+            && index.contains(&prefix)
+        {
+            suppressed.push(SuppressedAncestorEdge {
+                source: source_module.to_string(),
+                ancestor_package: prefix.clone(),
+                line,
+            });
         }
     }
 }
@@ -122,6 +139,7 @@ fn resolve_import_stmt(
     deps: &mut Vec<ResolvedDep>,
     unresolved: &mut Vec<UnresolvedImport>,
     include_ancestor_init: bool,
+    suppressed: &mut Vec<SuppressedAncestorEdge>,
 ) {
     for name in &imp.names {
         if index.contains(&name.name) {
@@ -131,7 +149,14 @@ fn resolve_import_stmt(
                 line: imp.line,
             });
             if include_ancestor_init {
-                push_ancestor_package_deps(source_module, &name.name, imp.line, index, deps);
+                push_ancestor_package_deps(
+                    source_module,
+                    &name.name,
+                    imp.line,
+                    index,
+                    deps,
+                    suppressed,
+                );
             }
         } else {
             unresolved.push(UnresolvedImport {
@@ -147,6 +172,7 @@ fn resolve_import_stmt(
 /// For relative imports (level > 0), first resolves to an absolute path.
 /// Then checks whether the module itself, or `module.name` for each imported
 /// name, is in the index.
+#[allow(clippy::too_many_arguments)]
 fn resolve_import_from_stmt(
     source_module: &str,
     imp: &RawImport,
@@ -155,6 +181,7 @@ fn resolve_import_from_stmt(
     unresolved: &mut Vec<UnresolvedImport>,
     include_ancestor_init: bool,
     source_is_package: bool,
+    suppressed: &mut Vec<SuppressedAncestorEdge>,
 ) {
     // Step 1: Determine the absolute module path.
     let base_module = if imp.level > 0 {
@@ -210,7 +237,14 @@ fn resolve_import_from_stmt(
 
         if index.contains(&qualified) {
             if include_ancestor_init {
-                push_ancestor_package_deps(source_module, &qualified, imp.line, index, deps);
+                push_ancestor_package_deps(
+                    source_module,
+                    &qualified,
+                    imp.line,
+                    index,
+                    deps,
+                    suppressed,
+                );
             }
             deps.push(ResolvedDep {
                 source: source_module.to_string(),
@@ -225,7 +259,14 @@ fn resolve_import_from_stmt(
     // inside the base module — add the base module itself as the dependency.
     if !any_resolved && !base_module.is_empty() && index.contains(&base_module) {
         if include_ancestor_init {
-            push_ancestor_package_deps(source_module, &base_module, imp.line, index, deps);
+            push_ancestor_package_deps(
+                source_module,
+                &base_module,
+                imp.line,
+                index,
+                deps,
+                suppressed,
+            );
         }
         deps.push(ResolvedDep {
             source: source_module.to_string(),
@@ -757,5 +798,87 @@ mod tests {
         let result = resolve_file_imports("x", &imports, &index, false, false);
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert_eq!(targets, vec!["a.b.c"]);
+    }
+
+    #[test]
+    fn suppressed_edges_recorded_for_in_tree_submodule() {
+        let index = make_index(&["pkg", "pkg.sub", "pkg.sub.child", "pkg.sub.other"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::Import,
+            module: None,
+            names: vec![name("pkg.sub.other")],
+            level: 0,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("pkg.sub.child", &imports, &index, true, false);
+
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert!(targets.contains(&"pkg.sub.other"));
+        assert!(!targets.contains(&"pkg.sub"));
+        assert!(!targets.contains(&"pkg"));
+
+        let suppressed: Vec<(&str, &str)> = result
+            .suppressed_ancestor_edges
+            .iter()
+            .map(|e| (e.source.as_str(), e.ancestor_package.as_str()))
+            .collect();
+        assert!(suppressed.contains(&("pkg.sub.child", "pkg.sub")));
+        assert!(suppressed.contains(&("pkg.sub.child", "pkg")));
+    }
+
+    #[test]
+    fn suppressed_edges_empty_for_cross_tree() {
+        let index = make_index(&["foo", "foo.core", "foo.core.util", "bar.models.entity"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::Import,
+            module: None,
+            names: vec![name("foo.core.util")],
+            level: 0,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("bar.models.entity", &imports, &index, true, false);
+
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert!(targets.contains(&"foo.core.util"));
+        assert!(targets.contains(&"foo.core"));
+        assert!(targets.contains(&"foo"));
+        assert!(result.suppressed_ancestor_edges.is_empty());
+    }
+
+    #[test]
+    fn suppressed_empty_when_ancestor_init_disabled() {
+        // Trivial guard test: push_ancestor_package_deps is never called when
+        // the flag is off, so nothing can be suppressed.
+        let index = make_index(&["a", "a.b", "a.b.c"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::ImportFrom,
+            module: Some("a.b.c".to_string()),
+            names: vec![name("Symbol")],
+            level: 0,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("x", &imports, &index, false, false);
+        assert!(result.suppressed_ancestor_edges.is_empty());
+    }
+
+    #[test]
+    fn package_init_importing_own_child_records_no_self_edge() {
+        let index = make_index(&["pkg", "pkg.child"]);
+        let imports = vec![RawImport {
+            kind: ImportKind::ImportFrom,
+            module: Some("pkg.child".to_string()),
+            names: vec![name("X")],
+            level: 0,
+            line: 0,
+        }];
+
+        let result = resolve_file_imports("pkg", &imports, &index, true, true);
+
+        let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
+        assert!(targets.contains(&"pkg.child"));
+        assert!(result.suppressed_ancestor_edges.is_empty());
     }
 }

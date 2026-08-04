@@ -5,7 +5,7 @@
 The binary is called `oboros`. Usage:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--strict] [--no-include-ancestor-init] [--exclude <PATH>] [--write]
+oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--include-self-ancestor-init] [--strict] [--no-include-ancestor-init] [--exclude <PATH>] [--write]
 ```
 
 | Flag | Description |
@@ -18,6 +18,7 @@ oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--d
 | `--check-cyclic-files` | Compare `[cycles] known-cyclic-files` in config against the freshly-computed set; exit 0 if identical, exit 1 if any difference (with a human diff on stderr). Independent of `--format`. Short-circuits the normal report. |
 | `--show-cyclic-files` | Include the cyclic-files set as an optional top-level `cyclic_files` array in the JSON report. No-op in human mode. |
 | `--ignore-derived-ancestor-init` | Exclude files that are cyclic only via a derived ancestor-`__init__.py` edge from the known-cyclic-files baseline. Overrides `[cycles] ignore-derived-ancestor-init` in config. Baseline-only; does not affect the normal cycle report. |
+| `--include-self-ancestor-init` | Detect cycles that close through an eager parent `__init__.py`. Overrides `[resolve] include-self-ancestor-init` in config. See [`[resolve]` section](#resolve-section). |
 | `--strict` | Exit with code 1 if any (non-suppressed) cycles are detected. When `--trace` is also present, exits 1 only if the union of impacting cycles across all traced paths is non-empty. Works with both output formats. |
 | `--no-include-ancestor-init` | Disable ancestor-package `__init__.py` edges. Overrides `include-ancestor-init` in config. See [`[resolve]` section](#resolve-section). |
 | `--trace <PATH>`, `-t <PATH>` | Report cycles that impact the given file or directory path(s), relative to the project root. Repeatable and/or comma-separated. When omitted, output is identical to today. See [Cycle impact](#cycle-impact---trace). |
@@ -120,6 +121,25 @@ include-ancestor-init = false
 ```
 
 Enabling this option may increase the number of reported cycles, since it exposes previously-hidden latent cycles. Passive `__init__.py` files (those with no first-party imports of their own) can be edge targets but can never be part of a cycle, so they do not produce false positives.
+
+##### `[resolve] include-self-ancestor-init`
+
+When `true`, Ouroboros detects real cycles that close through an eager parent `__init__.py` — for example `P/__init__.py → P.child → P` — which the default `is_ancestor_or_self` guard suppresses. Only cycle-closing suppressed edges are restored; non-cyclic real ancestor edges are not added.
+
+```toml
+[resolve]
+include-self-ancestor-init = true
+```
+
+**CLI flag:** `--include-self-ancestor-init` (no short form)
+
+**Default:** `false` (opt-in). The tool's default output is unchanged.
+
+**Interaction with `include-ancestor-init`:** This option has no effect when `include-ancestor-init` is disabled. A warning is emitted if both are misconfigured.
+
+**Interaction with `ignore-derived-ancestor-init`:** Newly surfaced cycles are ancestor-init-derived and can be grandfathered via `ignore-derived-ancestor-init` or suppressed via `[[cycles.ignore]]` / `known-cyclic-files`.
+
+**`min-scc-size` caveat:** Surfaced cycles are subject to `[cycles] min-scc-size` (default 2). Newly-surfaced self-tree init cycles are typically 2 files, so `min-scc-size ≥ 3` will hide them. If the flag appears to have no effect, check this setting.
 
 #### `[cycles]` section
 

@@ -146,6 +146,7 @@ mod tests {
         ResolveResult {
             deps,
             unresolved: Vec::new(),
+            suppressed_ancestor_edges: Vec::new(),
         }
     }
 
