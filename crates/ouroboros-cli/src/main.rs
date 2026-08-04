@@ -124,6 +124,12 @@ struct Cli {
     /// [resolve] include-self-ancestor-init.
     #[arg(long = "include-self-ancestor-init")]
     include_self_ancestor_init: bool,
+
+    /// Include imports nested inside functions, methods, classes, and
+    /// control-flow blocks (deferred/"local" imports), not just top-level ones.
+    /// Opt-in; default off. Overrides [parse] local-imports.
+    #[arg(long = "local-imports")]
+    local_imports: bool,
 }
 
 /// Walk upward from `start` looking for `oboros.toml`.
@@ -275,6 +281,10 @@ fn main() {
 
     if cli.include_self_ancestor_init {
         config.resolve.include_self_ancestor_init = true;
+    }
+
+    if cli.local_imports {
+        config.parse.local_imports = true;
     }
 
     // Not gated on cyclic_surface_active: this flag affects the main cycle
