@@ -50,7 +50,10 @@ pub fn restore_self_ancestor_init_edges(
     // 2. Augmented graph = clone + all candidate edges.
     let mut augmented = graph.clone();
     for (from, to, _) in &candidates {
-        augmented.entry(from.clone()).or_default().insert(to.clone());
+        augmented
+            .entry(from.clone())
+            .or_default()
+            .insert(to.clone());
     }
 
     // 3. One SCC pass; build node -> scc-id map.
@@ -114,7 +117,10 @@ mod tests {
     // is restored, with its line recorded in edge metadata.
     #[test]
     fn restores_direct_cycle() {
-        let mut graph = make_graph(&[("pkg/__init__.py", &["pkg/child.py"]), ("pkg/child.py", &[])]);
+        let mut graph = make_graph(&[
+            ("pkg/__init__.py", &["pkg/child.py"]),
+            ("pkg/child.py", &[]),
+        ]);
         let mut edge_metadata = EdgeMetadata {
             lines: HashMap::new(),
         };
@@ -135,7 +141,10 @@ mod tests {
         );
         let lines = edge_metadata
             .lines
-            .get(&(PathBuf::from("pkg/child.py"), PathBuf::from("pkg/__init__.py")))
+            .get(&(
+                PathBuf::from("pkg/child.py"),
+                PathBuf::from("pkg/__init__.py"),
+            ))
             .expect("edge metadata should record the restored edge");
         assert!(lines.contains(&5), "line 5 should be recorded");
     }
@@ -288,15 +297,24 @@ mod tests {
             &suppressed,
         );
 
-        assert_eq!(graph, original, "empty suppressed slice must not mutate graph");
-        assert!(edge_metadata.lines.is_empty(), "no metadata should be added");
+        assert_eq!(
+            graph, original,
+            "empty suppressed slice must not mutate graph"
+        );
+        assert!(
+            edge_metadata.lines.is_empty(),
+            "no metadata should be added"
+        );
     }
 
     // Test 6: a suppressed edge whose source has no mapping in module_to_path
     // is skipped without panicking and leaves the graph unchanged.
     #[test]
     fn skips_unknown_module_paths() {
-        let mut graph = make_graph(&[("pkg/__init__.py", &["pkg/child.py"]), ("pkg/child.py", &[])]);
+        let mut graph = make_graph(&[
+            ("pkg/__init__.py", &["pkg/child.py"]),
+            ("pkg/child.py", &[]),
+        ]);
         let original = graph.clone();
         let mut edge_metadata = EdgeMetadata {
             lines: HashMap::new(),
@@ -313,7 +331,10 @@ mod tests {
         );
 
         assert_eq!(graph, original, "unknown module edge must not mutate graph");
-        assert!(edge_metadata.lines.is_empty(), "no metadata should be added");
+        assert!(
+            edge_metadata.lines.is_empty(),
+            "no metadata should be added"
+        );
     }
 
     // Test 7: a candidate whose endpoints map to the same path (from == to) is
@@ -340,9 +361,10 @@ mod tests {
             "self-loop edge must not be added"
         );
         assert!(
-            !edge_metadata
-                .lines
-                .contains_key(&(PathBuf::from("pkg/__init__.py"), PathBuf::from("pkg/__init__.py"))),
+            !edge_metadata.lines.contains_key(&(
+                PathBuf::from("pkg/__init__.py"),
+                PathBuf::from("pkg/__init__.py")
+            )),
             "no metadata entry for a self pair"
         );
     }

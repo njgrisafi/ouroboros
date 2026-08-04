@@ -64,20 +64,16 @@ fn self_tree_cycle_reported_with_flag() {
     );
     // Verify the restored edge carries its import line into JSON edge_metadata
     // (proves EdgeMetadata wiring reached the JSON output)
-    let has_edge_lines = cycles[0]["files"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|f| {
-            f["edges"]
-                .as_array()
-                .map(|edges| {
-                    edges
-                        .iter()
-                        .any(|e| !e["lines"].as_array().unwrap_or(&vec![]).is_empty())
-                })
-                .unwrap_or(false)
-        });
+    let has_edge_lines = cycles[0]["files"].as_array().unwrap().iter().any(|f| {
+        f["edges"]
+            .as_array()
+            .map(|edges| {
+                edges
+                    .iter()
+                    .any(|e| !e["lines"].as_array().unwrap_or(&vec![]).is_empty())
+            })
+            .unwrap_or(false)
+    });
     assert!(
         has_edge_lines,
         "restored edge must carry import line numbers in JSON: {parsed}"
@@ -115,7 +111,10 @@ fn flag_is_noop_without_ancestor_init() {
 
 #[test]
 fn restored_cycle_is_suppressible_via_ignore() {
-    let parsed = run("self_ancestor_init_ignore", &["--include-self-ancestor-init"]);
+    let parsed = run(
+        "self_ancestor_init_ignore",
+        &["--include-self-ancestor-init"],
+    );
     let cycles = parsed["cycles"].as_array().unwrap();
     assert!(
         cycles.is_empty(),
