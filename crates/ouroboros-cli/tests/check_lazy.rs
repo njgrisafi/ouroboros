@@ -34,6 +34,17 @@ fn cycles(parsed: &serde_json::Value) -> &Vec<serde_json::Value> {
         .expect("cycles must be an array")
 }
 
+fn trace_relationships(parsed: &serde_json::Value) -> Vec<String> {
+    parsed["traced"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|t| t["files"].as_array().into_iter().flatten())
+        .flat_map(|f| f["impacts"].as_array().into_iter().flatten())
+        .map(|imp| imp["relationship"].as_str().unwrap().to_string())
+        .collect()
+}
+
 #[test]
 fn lazy_basic_without_flag_reports_plain_import_cycle() {
     let parsed = run_json("lazy_basic", &[]);
@@ -157,4 +168,38 @@ fn check_lazy_with_local_imports_warns_but_emits_valid_json() {
     let parsed: serde_json::Value = serde_json::from_str(&stdout)
         .unwrap_or_else(|e| panic!("stdout must remain valid JSON: {e}\nstdout: {stdout}"));
     assert_eq!(parsed["analysis"], "lazy");
+}
+
+#[test]
+fn trace_member_of_lazy_cycle() {
+    let parsed = run_json("lazy_basic", &["--check-lazy", "--trace", "models.py"]);
+    let relationships = trace_relationships(&parsed);
+    assert!(
+        relationships.iter().any(|r| r == "member"),
+        "models.py is part of the lazy cycle, so trace must report a member impact: {parsed}"
+    );
+}
+
+#[test]
+fn trace_reachable_to_lazy_cycle() {
+    let parsed = run_json("lazy_basic", &["--check-lazy", "--trace", "main.py"]);
+    let relationships = trace_relationships(&parsed);
+    assert!(
+        relationships.iter().any(|r| r == "reachable"),
+        "main.py reaches the lazy cycle but is not a member, so trace must report reachable: {parsed}"
+    );
+    assert!(
+        !relationships.iter().any(|r| r == "member"),
+        "main.py must not be a member of the lazy cycle: {parsed}"
+    );
+}
+
+#[test]
+fn trace_has_no_impact_when_no_lazy_cycle() {
+    let parsed = run_json("lazy_deferred", &["--check-lazy", "--trace", "a.py"]);
+    let relationships = trace_relationships(&parsed);
+    assert!(
+        relationships.is_empty(),
+        "with no lazy cycle, no file may report an impact: {parsed}"
+    );
 }
