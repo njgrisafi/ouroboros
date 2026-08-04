@@ -1,0 +1,4 @@
+source-roots = ["src"]
+
+[resolve]
+include-self-ancestor-init = true

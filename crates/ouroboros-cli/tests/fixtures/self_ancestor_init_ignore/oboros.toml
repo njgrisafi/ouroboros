@@ -1,0 +1,5 @@
+source-roots = ["src"]
+
+[[cycles.ignore]]
+files = ["src/pkg/__init__.py", "src/pkg/child.py"]
+reason = "test: verify restored cycle is suppressible"
