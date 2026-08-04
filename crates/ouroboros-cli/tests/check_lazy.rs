@@ -203,3 +203,37 @@ fn trace_has_no_impact_when_no_lazy_cycle() {
         "with no lazy cycle, no file may report an impact: {parsed}"
     );
 }
+
+#[test]
+fn lazy_contexts_check_lazy_finds_cycle_across_init_time_contexts() {
+    let parsed = run_json("lazy_contexts", &["--check-lazy"]);
+    assert_eq!(parsed["analysis"], "lazy");
+    assert_eq!(
+        cycles(&parsed).len(),
+        1,
+        "init-time contexts (module-body + class-body) must form a lazy cycle: {parsed}"
+    );
+    let contexts: Vec<String> = cycles(&parsed)
+        .iter()
+        .flat_map(|c| c["files"].as_array().into_iter().flatten())
+        .flat_map(|f| f["edges"].as_array().into_iter().flatten())
+        .filter_map(|e| e["blocker_context"].as_str().map(str::to_string))
+        .collect();
+    assert!(
+        contexts.iter().any(|c| c == "module-body"),
+        "module-body context must be classified: {contexts:?}"
+    );
+    assert!(
+        contexts.iter().any(|c| c == "class-body"),
+        "class-body context must be classified: {contexts:?}"
+    );
+}
+
+#[test]
+fn lazy_contexts_deferred_check_lazy_finds_no_cycle() {
+    let parsed = run_json("lazy_contexts_deferred", &["--check-lazy"]);
+    assert!(
+        cycles(&parsed).is_empty(),
+        "a deferred back-edge (method body) must not form a lazy cycle: {parsed}"
+    );
+}
