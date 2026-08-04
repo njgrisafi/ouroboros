@@ -1264,6 +1264,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         }
     }
 
@@ -1609,6 +1610,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
 
         let stats = ReportStats::from_report(&report);
@@ -1651,6 +1653,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec!["pkg/a.py".to_string(), "pkg/b.py".to_string()],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, None, "");
@@ -1737,6 +1740,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, None, "");
@@ -1748,6 +1752,7 @@ mod tests {
     fn html_has_diff_view() {
         let mut cycle = make_cycle(1, &["auth"], &["auth/a.py", "auth/b.py"]);
         cycle.files[0].edges = vec![crate::output::JsonEdge {
+            blocker_context: None,
             to: "auth/b.py".to_string(),
             lines: vec![5],
         }];
@@ -1762,6 +1767,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, None, "");
@@ -1796,6 +1802,7 @@ mod tests {
 
         let mut cycle = make_cycle(1, &["auth"], &["auth/a.py", "auth/b.py"]);
         cycle.files[0].edges = vec![crate::output::JsonEdge {
+            blocker_context: None,
             to: "auth/b.py".to_string(),
             lines: vec![5],
         }];
@@ -1810,6 +1817,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, Some(dir.as_path()), "");
@@ -1836,6 +1844,7 @@ mod tests {
 
         let mut cycle = make_cycle(1, &["auth"], &["auth/a.py", "auth/b.py"]);
         cycle.files[0].edges = vec![crate::output::JsonEdge {
+            blocker_context: None,
             to: "auth/b.py".to_string(),
             lines: vec![3],
         }];
@@ -1850,6 +1859,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, Some(second_root.as_path()), "");
@@ -1865,6 +1875,7 @@ mod tests {
 
         let mut cycle = make_cycle(1, &["auth"], &["auth/a.py", "auth/b.py"]);
         cycle.files[0].edges = vec![crate::output::JsonEdge {
+            blocker_context: None,
             to: "auth/b.py".to_string(),
             lines: vec![5],
         }];
@@ -1879,6 +1890,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, Some(fake_root.as_path()), "");
@@ -1903,6 +1915,7 @@ mod tests {
             &["billing/__init__.py", "billing/managers.py"],
         );
         cycle.files[0].edges = vec![crate::output::JsonEdge {
+            blocker_context: None,
             to: "billing/managers.py".to_string(),
             lines: vec![1],
         }];
@@ -1917,6 +1930,7 @@ mod tests {
             unknown_paths: vec![],
             excluded: vec![],
             cyclic_files: vec![],
+            analysis: None,
         };
         let stats = ReportStats::from_report(&report);
         let html = generate_html(&report, &stats, Some(dir.as_path()), "");

@@ -30,10 +30,14 @@ fn non_lazy_output_unchanged() {
 
     let parsed: serde_json::Value = serde_json::from_str(&out1).unwrap();
     assert_eq!(parsed["version"], 2);
+    assert!(
+        parsed.get("analysis").is_none(),
+        "non-lazy report must not carry an analysis field"
+    );
 }
 
 #[test]
-fn check_lazy_output_is_valid_json() {
+fn check_lazy_output_is_valid_and_tagged() {
     let config =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cyclic_basic/oboros.toml");
     let config = config.to_str().unwrap();
@@ -41,4 +45,5 @@ fn check_lazy_output_is_valid_json() {
     let lazy_out = run(&["--config", config, "--format", "json", "--check-lazy"]);
     let lazy_json: serde_json::Value = serde_json::from_str(&lazy_out).unwrap();
     assert_eq!(lazy_json["version"], 2);
+    assert_eq!(lazy_json["analysis"], "lazy");
 }

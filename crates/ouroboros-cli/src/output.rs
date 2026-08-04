@@ -21,6 +21,8 @@ pub struct JsonReport {
     pub excluded: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cyclic_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analysis: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -48,6 +50,8 @@ pub struct JsonCycleFile {
 pub struct JsonEdge {
     pub to: String,
     pub lines: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocker_context: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -189,6 +193,27 @@ pub struct JsonReportInput<'a> {
     pub excluded: Vec<String>,
     pub cyclic_files: Vec<String>,
     pub source_roots: &'a [String],
+    pub blocker_contexts: Option<
+        std::collections::HashMap<
+            (std::path::PathBuf, std::path::PathBuf),
+            Vec<ouroboros_core::usage::UseContext>,
+        >,
+    >,
+    pub analysis: Option<String>,
+}
+
+/// Map a [`UseContext`] variant to its stable JSON string label.
+pub fn stringify_context(ctx: &ouroboros_core::usage::UseContext) -> &'static str {
+    use ouroboros_core::usage::UseContext;
+    match ctx {
+        UseContext::ModuleBody => "module-body",
+        UseContext::ClassBody => "class-body",
+        UseContext::Decorator => "decorator",
+        UseContext::BaseClass => "base-class",
+        UseContext::DefaultArg => "default-arg",
+        UseContext::Comprehension => "comprehension",
+        UseContext::ControlFlow => "control-flow",
+    }
 }
 
 pub fn build_json_report(
@@ -217,9 +242,18 @@ pub fn build_json_report(
                                     let mut sorted = lines.clone();
                                     sorted.sort();
                                     sorted.dedup();
+                                    let blocker_context = input
+                                        .blocker_contexts
+                                        .as_ref()
+                                        .and_then(|ctxs| {
+                                            ctxs.get(&(path.to_path_buf(), other.clone()))
+                                        })
+                                        .and_then(|ctxs| ctxs.first())
+                                        .map(|ctx| stringify_context(ctx).to_string());
                                     JsonEdge {
                                         to: other.display().to_string(),
                                         lines: sorted,
+                                        blocker_context,
                                     }
                                 })
                         })
@@ -251,6 +285,7 @@ pub fn build_json_report(
         unknown_paths: input.unknown_paths,
         excluded: input.excluded,
         cyclic_files: input.cyclic_files,
+        analysis: input.analysis,
     }
 }
 
@@ -490,6 +525,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
 
@@ -518,6 +555,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
 
@@ -548,6 +587,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
 
@@ -572,6 +613,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
 
@@ -621,6 +664,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
 
@@ -642,6 +687,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
 
@@ -666,6 +713,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
 
@@ -775,6 +824,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
 
@@ -809,6 +860,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
 
@@ -843,6 +896,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
 
@@ -864,6 +919,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
 
@@ -960,6 +1017,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
         let json = serde_json::to_string_pretty(&report).unwrap();
@@ -981,6 +1040,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
         let json = serde_json::to_string_pretty(&report).unwrap();
@@ -1004,6 +1065,8 @@ mod tests {
                 excluded: vec!["tests/".to_string()],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
         let json = serde_json::to_string_pretty(&report).unwrap();
@@ -1026,6 +1089,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec![],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
         let json = serde_json::to_string_pretty(&report).unwrap();
@@ -1049,6 +1114,8 @@ mod tests {
                 excluded: vec![],
                 cyclic_files: vec!["pkg/a.py".to_string()],
                 source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
             },
         );
         let json = serde_json::to_string_pretty(&report).unwrap();
@@ -1056,5 +1123,128 @@ mod tests {
         let files = parsed["cyclic_files"].as_array().unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0], "pkg/a.py");
+    }
+
+    #[test]
+    fn analysis_field_omitted_when_none() {
+        let edge_metadata = make_edge_metadata(&[]);
+        let report = build_json_report(
+            &[],
+            0,
+            &edge_metadata,
+            JsonReportInput {
+                traced: vec![],
+                unknown_paths: vec![],
+                excluded: vec![],
+                cyclic_files: vec![],
+                source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
+            },
+        );
+        let json = serde_json::to_string_pretty(&report).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(
+            parsed.get("analysis").is_none(),
+            "analysis key should be absent when None"
+        );
+    }
+
+    #[test]
+    fn analysis_field_present_when_some() {
+        let edge_metadata = make_edge_metadata(&[]);
+        let report = build_json_report(
+            &[],
+            0,
+            &edge_metadata,
+            JsonReportInput {
+                traced: vec![],
+                unknown_paths: vec![],
+                excluded: vec![],
+                cyclic_files: vec![],
+                source_roots: &[],
+                blocker_contexts: None,
+                analysis: Some("lazy".to_string()),
+            },
+        );
+        let parsed: serde_json::Value = serde_json::to_value(&report).unwrap();
+        assert_eq!(parsed["analysis"], "lazy");
+    }
+
+    #[test]
+    fn edge_blocker_context_omitted_when_no_contexts() {
+        let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
+        let edge_metadata =
+            make_edge_metadata(&[("a.py", "b.py", vec![10]), ("b.py", "a.py", vec![5])]);
+        let report = build_json_report(
+            &kept,
+            0,
+            &edge_metadata,
+            JsonReportInput {
+                traced: vec![],
+                unknown_paths: vec![],
+                excluded: vec![],
+                cyclic_files: vec![],
+                source_roots: &[],
+                blocker_contexts: None,
+                analysis: None,
+            },
+        );
+        let parsed: serde_json::Value = serde_json::to_value(&report).unwrap();
+        assert!(
+            parsed["cycles"][0]["files"][0]["edges"][0]
+                .get("blocker_context")
+                .is_none(),
+            "blocker_context should be absent when no contexts provided"
+        );
+    }
+
+    #[test]
+    fn edge_blocker_context_present_when_provided() {
+        use ouroboros_core::usage::UseContext;
+        let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
+        let edge_metadata =
+            make_edge_metadata(&[("a.py", "b.py", vec![10]), ("b.py", "a.py", vec![5])]);
+        let mut blocker_contexts: HashMap<(PathBuf, PathBuf), Vec<UseContext>> = HashMap::new();
+        blocker_contexts.insert(
+            (PathBuf::from("a.py"), PathBuf::from("b.py")),
+            vec![UseContext::ClassBody],
+        );
+        let report = build_json_report(
+            &kept,
+            0,
+            &edge_metadata,
+            JsonReportInput {
+                traced: vec![],
+                unknown_paths: vec![],
+                excluded: vec![],
+                cyclic_files: vec![],
+                source_roots: &[],
+                blocker_contexts: Some(blocker_contexts),
+                analysis: Some("lazy".to_string()),
+            },
+        );
+        let parsed: serde_json::Value = serde_json::to_value(&report).unwrap();
+        let a_edges = parsed["cycles"][0]["files"][0]["edges"].as_array().unwrap();
+        let a_to_b = a_edges
+            .iter()
+            .find(|e| e["to"] == "b.py")
+            .expect("a.py should have an edge to b.py");
+        assert_eq!(a_to_b["blocker_context"], "class-body");
+    }
+
+    #[test]
+    fn stringify_context_covers_all_variants() {
+        use ouroboros_core::usage::UseContext;
+        assert_eq!(stringify_context(&UseContext::ModuleBody), "module-body");
+        assert_eq!(stringify_context(&UseContext::ClassBody), "class-body");
+        assert_eq!(stringify_context(&UseContext::Decorator), "decorator");
+        assert_eq!(stringify_context(&UseContext::BaseClass), "base-class");
+        assert_eq!(stringify_context(&UseContext::DefaultArg), "default-arg");
+        assert_eq!(
+            stringify_context(&UseContext::Comprehension),
+            "comprehension"
+        );
+        assert_eq!(stringify_context(&UseContext::ControlFlow), "control-flow");
     }
 }

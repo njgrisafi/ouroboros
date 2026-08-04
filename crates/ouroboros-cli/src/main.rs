@@ -442,12 +442,15 @@ fn main() {
 
     // --check-lazy analyzes lazy-realization cycles: swap in the init-time-use graph
     // for all downstream consumers and skip ancestor-init restore (irrelevant here).
-    if cli.check_lazy {
+    let lazy_blocker_contexts = if cli.check_lazy {
         let lazy_result =
             ouroboros_core::usage::analyze_lazy(&discovery_result, &index, &project_root);
         graph_result.graph = lazy_result.graph;
         graph_result.edge_metadata = lazy_result.edge_metadata;
-    }
+        Some(lazy_result.blocker_contexts)
+    } else {
+        None
+    };
 
     if !cli.check_lazy
         && config.resolve.include_ancestor_init
@@ -829,7 +832,14 @@ fn main() {
 
     match cli.format {
         OutputFormat::Human => {
-            println!("\n--- dependency cycles ({}) ---", cycles.len());
+            if cli.check_lazy {
+                println!(
+                    "\n--- lazy-import realization cycles ({}) ---",
+                    cycles.len()
+                );
+            } else {
+                println!("\n--- dependency cycles ({}) ---", cycles.len());
+            }
             if ignore_list_suppressed > 0 {
                 println!(
                     "({} cycles suppressed by ignore list)",
@@ -887,7 +897,40 @@ fn main() {
                     let import_lines =
                         output::collect_import_lines(path, cycle, &graph_result.edge_metadata);
 
-                    if import_lines.is_empty() {
+                    if cli.check_lazy {
+                        let context = lazy_blocker_contexts.as_ref().and_then(|ctxs| {
+                            cycle
+                                .iter()
+                                .filter(|other| *other != path)
+                                .find_map(|other| {
+                                    ctxs.get(&(path.clone(), other.clone()))
+                                        .and_then(|v| v.first())
+                                        .map(output::stringify_context)
+                                })
+                        });
+                        let line_strs: Vec<String> =
+                            import_lines.iter().map(|l| l.to_string()).collect();
+                        match (line_strs.as_slice(), context) {
+                            ([], _) => println!("  {}", path.display()),
+                            ([line], Some(ctx)) => {
+                                println!("  {} (blocker at line {}, {})", path.display(), line, ctx)
+                            }
+                            ([line], None) => {
+                                println!("  {} (blocker at line {})", path.display(), line)
+                            }
+                            (lines, Some(ctx)) => println!(
+                                "  {} (blockers at lines {}, {})",
+                                path.display(),
+                                lines.join(", "),
+                                ctx
+                            ),
+                            (lines, None) => println!(
+                                "  {} (blockers at lines {})",
+                                path.display(),
+                                lines.join(", ")
+                            ),
+                        }
+                    } else if import_lines.is_empty() {
                         println!("  {}", path.display());
                     } else if import_lines.len() == 1 {
                         println!("  {} (import at line {})", path.display(), import_lines[0]);
@@ -1004,6 +1047,12 @@ fn main() {
                         vec![]
                     },
                     source_roots: &config.source_roots,
+                    blocker_contexts: lazy_blocker_contexts,
+                    analysis: if cli.check_lazy {
+                        Some("lazy".to_string())
+                    } else {
+                        None
+                    },
                 },
             );
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
