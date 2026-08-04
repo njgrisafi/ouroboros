@@ -64,7 +64,7 @@ pub fn restore_self_ancestor_init_edges(
 
     // 4. Keep candidates whose endpoints share an SCC.
     for (from, to, line) in candidates {
-        if node_to_scc.get(&from).is_some() && node_to_scc.get(&from) == node_to_scc.get(&to) {
+        if node_to_scc.contains_key(&from) && node_to_scc.get(&from) == node_to_scc.get(&to) {
             graph.entry(from.clone()).or_default().insert(to.clone());
             edge_metadata
                 .lines
@@ -340,10 +340,9 @@ mod tests {
             "self-loop edge must not be added"
         );
         assert!(
-            edge_metadata
+            !edge_metadata
                 .lines
-                .get(&(PathBuf::from("pkg/__init__.py"), PathBuf::from("pkg/__init__.py")))
-                .is_none(),
+                .contains_key(&(PathBuf::from("pkg/__init__.py"), PathBuf::from("pkg/__init__.py"))),
             "no metadata entry for a self pair"
         );
     }

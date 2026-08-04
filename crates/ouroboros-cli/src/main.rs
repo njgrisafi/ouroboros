@@ -118,6 +118,12 @@ struct Cli {
     /// the normal cycle report.
     #[arg(long = "ignore-derived-ancestor-init")]
     ignore_derived_ancestor_init: bool,
+
+    /// Detect self/in-tree cycles that close through an eager parent __init__.py
+    /// (e.g. `P/__init__.py -> P.child -> P`). Opt-in; default off. Overrides
+    /// [resolve] include-self-ancestor-init.
+    #[arg(long = "include-self-ancestor-init")]
+    include_self_ancestor_init: bool,
 }
 
 /// Walk upward from `start` looking for `oboros.toml`.
@@ -267,6 +273,19 @@ fn main() {
         config.cycles.ignore_derived_ancestor_init = true;
     }
 
+    if cli.include_self_ancestor_init {
+        config.resolve.include_self_ancestor_init = true;
+    }
+
+    // Not gated on cyclic_surface_active: this flag affects the main cycle
+    // report, not just the cyclic-files surface (unlike ignore-derived-ancestor-init).
+    if config.resolve.include_self_ancestor_init && !config.resolve.include_ancestor_init {
+        eprintln!(
+            "warning: --include-self-ancestor-init / [resolve] include-self-ancestor-init \
+             has no effect when include-ancestor-init is disabled"
+        );
+    }
+
     let mut seen_excludes = std::collections::HashSet::new();
     let merged_excludes: Vec<String> = config
         .exclude
@@ -385,7 +404,28 @@ fn main() {
     }
 
     spinner.set_message("Building dependency graph...");
-    let graph_result = graph::build_file_dependency_graph(&discovery_result, &resolve_result);
+    let mut graph_result = graph::build_file_dependency_graph(&discovery_result, &resolve_result);
+
+    if config.resolve.include_ancestor_init && config.resolve.include_self_ancestor_init {
+        // Build an owned module->path map. PathBuf values MUST be rel_path
+        // (project-root-relative) — the graph is keyed on rel_path (build.rs:57,64).
+        // Iterate roots/files in the same order as build_file_dependency_graph
+        // (build.rs:26-43) so module-name collision resolution is consistent.
+        let module_to_path: std::collections::HashMap<String, std::path::PathBuf> =
+            discovery_result
+                .roots
+                .iter()
+                .flat_map(|r| r.files.iter())
+                .filter(|f| !f.module_name.is_empty())
+                .map(|f| (f.module_name.clone(), f.rel_path.clone()))
+                .collect();
+        graph::restore_self_ancestor_init_edges(
+            &mut graph_result.graph,
+            &mut graph_result.edge_metadata,
+            &module_to_path,
+            &resolve_result.suppressed_ancestor_edges,
+        );
+    }
 
     for (module_name, paths) in &graph_result.module_collisions {
         let path_list: Vec<String> = paths.iter().map(|p| p.display().to_string()).collect();
