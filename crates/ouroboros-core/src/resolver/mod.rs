@@ -8,7 +8,7 @@
 
 pub(crate) mod binding;
 pub mod error;
-mod index;
+pub mod index;
 mod relative;
 mod resolve;
 
