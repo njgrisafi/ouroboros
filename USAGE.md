@@ -5,7 +5,7 @@
 The binary is called `oboros`. Usage:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--include-self-ancestor-init] [--local-imports] [--strict] [--no-include-ancestor-init] [--exclude <PATH>] [--write]
+oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--include-self-ancestor-init] [--local-imports] [--include-string-imports] [--strict] [--no-include-ancestor-init] [--exclude <PATH>] [--write]
 ```
 
 | Flag | Description |
@@ -20,6 +20,7 @@ oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--d
 | `--ignore-derived-ancestor-init` | Exclude files that are cyclic only via a derived ancestor-`__init__.py` edge from the known-cyclic-files baseline. Overrides `[cycles] ignore-derived-ancestor-init` in config. Baseline-only; does not affect the normal cycle report. |
 | `--include-self-ancestor-init` | Detect cycles that close through an eager parent `__init__.py`. Overrides `[resolve] include-self-ancestor-init` in config. See [`[resolve]` section](#resolve-section). |
 | `--local-imports` | Include imports nested inside functions, methods, classes, and control-flow blocks (deferred/"local" imports), not just top-level ones. Overrides `[parse] local-imports` in config. See [`[parse]` section](#parse-section). |
+| `--include-string-imports` | Also treat string literals that look like module paths as imports (ruff-style "string imports", e.g. `importlib.import_module("a.b.c")`). Respects `--local-imports` for whether strings nested inside functions/classes are scanned. Overrides `[parse] string-imports` in config. See [`[parse]` section](#parse-section). |
 | `--strict` | Exit with code 1 if any (non-suppressed) cycles are detected. When `--trace` is also present, exits 1 only if the union of impacting cycles across all traced paths is non-empty. Works with both output formats. |
 | `--no-include-ancestor-init` | Disable ancestor-package `__init__.py` edges. Overrides `include-ancestor-init` in config. See [`[resolve]` section](#resolve-section). |
 | `--trace <PATH>`, `-t <PATH>` | Report cycles that impact the given file or directory path(s), relative to the project root. Repeatable and/or comma-separated. When omitted, output is identical to today. See [Cycle impact](#cycle-impact---trace). |
@@ -62,6 +63,7 @@ source-roots = ["src", "lib"]
 
 [parse]
 local-imports = true
+string-imports = true
 
 [resolve]
 include-ancestor-init = true
@@ -94,6 +96,8 @@ Controls how Python imports are extracted from source files.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `local-imports` | `bool` | `false` | Whether to include imports nested inside functions, methods, classes, and control-flow blocks. When `false`, only top-level imports are considered. |
+| `string-imports` | `bool` | `false` | Whether to detect string literals that look like dotted module paths (ruff-style "string imports") and treat them as dependency edges. Respects the `local-imports` nesting gate (see below). |
+| `string-imports-min-dots` | `int` | `2` | Minimum number of dots a string literal must contain to be considered a module-path candidate. Matches ruff's `string-imports-min-dots` default. `0` disables the dot requirement (very aggressive). |
 
 Setting `local-imports = true` is useful when your codebase uses deferred imports (e.g. inside functions) to break runtime cycles, and you want to detect those hidden dependencies too.
 
@@ -103,6 +107,23 @@ local-imports = true
 ```
 
 You can also enable this for a single run without editing the config by passing `--local-imports` on the CLI. The flag forces the option on and takes precedence over the config value (which defaults to `false`).
+
+#### String imports
+
+Some codebases load modules dynamically by name — `importlib.import_module("a.b.c")`, plugin registries, settings module paths — and those edges are invisible to statement-level import extraction. With `string-imports` enabled, Ouroboros scans **every** string literal (like ruff's `analyze.detect-string-imports`, not just `importlib` call sites) and treats any string that looks like a dotted module path as an import candidate:
+
+- The string must have at least `string-imports-min-dots` dots (default 2, matching ruff/Pants) and consist of dot-separated identifier segments. Byte strings (`b"..."`) never count; f-string literal fragments don't count, but strings inside f-string interpolations do; docstrings are scanned like any other string.
+- Candidates are resolved against your first-party modules only. Trailing components may be attributes, so the resolver tries progressively shorter prefixes: `"a.b.c.MyClass"` resolves to `a.b.c`. Prefixes with fewer than `string-imports-min-dots` dots are never tried.
+- Candidates that match no first-party module are **dropped silently** — they are not reported as unresolved imports and never trip `--strict`. A module string-importing itself (e.g. `importlib.import_module(__name__)`, or a docstring naming its own module) is also dropped.
+- String imports compose with `local-imports`: when `local-imports` is off (default), only module-level string literals are scanned; when on, strings inside functions, classes, and control-flow blocks are scanned too. Module-level `def` default arguments and decorators evaluate at import time, so strings there count as module-level.
+
+```toml
+[parse]
+string-imports = true
+string-imports-min-dots = 2
+```
+
+You can also enable string imports for a single run with `--include-string-imports`, which forces the option on and takes precedence over the config value.
 
 #### `[resolve]` section
 

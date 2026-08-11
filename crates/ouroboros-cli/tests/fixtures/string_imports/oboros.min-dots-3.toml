@@ -1,0 +1,4 @@
+source-roots = ["src"]
+
+[parse]
+string-imports-min-dots = 3

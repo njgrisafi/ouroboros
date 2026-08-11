@@ -10,6 +10,7 @@ pub mod error;
 mod index;
 mod relative;
 mod resolve;
+mod string;
 
 pub use error::ResolveError;
 pub use index::ModuleIndex;
@@ -56,6 +57,20 @@ pub struct UnresolvedImport {
     pub import_path: String,
 }
 
+/// Options controlling import resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolveOptions {
+    /// Whether to record dependency edges to ancestor package `__init__.py`
+    /// files of imported modules.
+    pub include_ancestor_init: bool,
+    /// Whether the importing file is itself a package `__init__.py` (affects
+    /// relative-import resolution).
+    pub source_is_package: bool,
+    /// Minimum dots for string-import candidates; bounds the prefix
+    /// shortening applied to candidates like `"a.b.c.MyClass"`.
+    pub string_imports_min_dots: usize,
+}
+
 /// Resolution results for a single file.
 #[derive(Debug)]
 pub struct FileResolution {
@@ -86,16 +101,9 @@ pub fn resolve_file(
     source_module: &str,
     imports: &[RawImport],
     index: &ModuleIndex,
-    include_ancestor_init: bool,
-    source_is_package: bool,
+    options: &ResolveOptions,
 ) -> FileResolution {
-    resolve::resolve_file_imports(
-        source_module,
-        imports,
-        index,
-        include_ancestor_init,
-        source_is_package,
-    )
+    resolve::resolve_file_imports(source_module, imports, index, options)
 }
 
 /// Resolve all imports for every discovered file in the project.
@@ -112,8 +120,11 @@ pub fn resolve_all(
     config: &Config,
     project_root: &std::path::Path,
 ) -> ResolveResult {
-    let include_local = config.parse.local_imports;
-    let include_ancestor_init = config.resolve.include_ancestor_init;
+    let extract_options = crate::parser::ExtractOptions {
+        include_local: config.parse.local_imports,
+        string_imports: config.parse.string_imports,
+        string_imports_min_dots: config.parse.string_imports_min_dots,
+    };
     let mut all_deps = Vec::new();
     let mut all_unresolved = Vec::new();
     let mut all_suppressed = Vec::new();
@@ -127,7 +138,7 @@ pub fn resolve_all(
                 Err(_) => continue,
             };
 
-            let imports = match crate::parser::extract_imports(&source, include_local) {
+            let imports = match crate::parser::extract_imports(&source, &extract_options) {
                 Ok(imports) => imports,
                 Err(_) => continue,
             };
@@ -136,13 +147,12 @@ pub fn resolve_all(
                 .rel_path
                 .file_name()
                 .is_some_and(|name| name == "__init__.py");
-            let resolution = resolve_file(
-                &file.module_name,
-                &imports,
-                index,
-                include_ancestor_init,
+            let resolve_options = ResolveOptions {
+                include_ancestor_init: config.resolve.include_ancestor_init,
                 source_is_package,
-            );
+                string_imports_min_dots: config.parse.string_imports_min_dots,
+            };
+            let resolution = resolve_file(&file.module_name, &imports, index, &resolve_options);
             all_deps.extend(resolution.deps);
             all_unresolved.extend(resolution.unresolved);
             all_suppressed.extend(resolution.suppressed_ancestor_edges);
