@@ -204,27 +204,69 @@ fn flag_overrides_config_default_false() {
     );
 }
 
-#[test]
-fn verbose_prints_string_imports() {
-    let args = vec![
+fn run_verbose(config_file: &str, extra_args: &[&str]) -> String {
+    let mut args = vec![
         "--config".to_string(),
         fixture_dir("string_imports")
-            .join("oboros.toml")
+            .join(config_file)
             .to_str()
             .unwrap()
             .to_string(),
-        "--include-string-imports".to_string(),
         "--verbose".to_string(),
     ];
+    args.extend(extra_args.iter().map(|s| s.to_string()));
     let output = Command::new(binary_path())
         .args(&args)
         .output()
         .expect("failed to run oboros");
-    let stdout = String::from_utf8(output.stdout).unwrap();
+    String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn verbose_prints_string_imports() {
+    let stdout = run_verbose("oboros.toml", &["--include-string-imports"]);
     // Match the exact verbose arm so this can't pass on incidental text like
     // the config dump ("string_imports: true") or module names ("my.app.a").
     assert!(
         stdout.contains("string  (my.app.a)"),
         "verbose import listing must render the string-import arm: {stdout}"
+    );
+}
+
+#[test]
+fn call_sites_mode_ignores_registry_strings() {
+    // Default mode is call-sites: REGISTRY_ENTRY = "my.app.b" in c.py is not
+    // at an import_module/__import__ call site and must not be scanned.
+    let stdout = run_verbose("oboros.toml", &["--include-string-imports"]);
+    assert!(
+        !stdout.contains("string  (my.app.b)"),
+        "call-sites mode must not scan registry strings: {stdout}"
+    );
+}
+
+#[test]
+fn all_mode_scans_registry_strings() {
+    let stdout = run_verbose("oboros.all.toml", &["--include-string-imports"]);
+    assert!(
+        stdout.contains("string  (my.app.b)"),
+        "all mode must scan registry strings: {stdout}"
+    );
+}
+
+#[test]
+fn all_mode_reports_same_cycles_for_call_site_edges() {
+    // Call-site edges are a subset of all-mode edges, so the cycle report is
+    // identical for this fixture.
+    let call_sites = run("string_imports", &["--include-string-imports"]);
+    let output = run_with_config(
+        &fixture_dir("string_imports").join("oboros.all.toml"),
+        &["--include-string-imports"],
+    );
+    let all_mode: serde_json::Value =
+        serde_json::from_str(&String::from_utf8(output.stdout).unwrap()).unwrap();
+    assert_eq!(
+        cycle_file_sets(&call_sites),
+        cycle_file_sets(&all_mode),
+        "both modes must report the call-site cycle: {all_mode}"
     );
 }

@@ -96,8 +96,9 @@ Controls how Python imports are extracted from source files.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `local-imports` | `bool` | `false` | Whether to include imports nested inside functions, methods, classes, and control-flow blocks. When `false`, only top-level imports are considered. |
-| `string-imports` | `bool` | `false` | Whether to detect string literals that look like dotted module paths (ruff-style "string imports") and treat them as dependency edges. Respects the `local-imports` nesting gate (see below). |
-| `string-imports-min-dots` | `int` | `2` | Minimum number of dots a string literal must contain to be considered a module-path candidate. Matches ruff's `string-imports-min-dots` default. `0` disables the dot requirement (very aggressive). |
+| `string-imports` | `bool` | `false` | Whether to detect string literals that name modules (dynamic "string imports") and treat them as dependency edges. Respects the `local-imports` nesting gate (see below). |
+| `string-imports-mode` | `"call-sites"` \| `"all"` | `"call-sites"` | Which strings count as candidates. `"call-sites"` only scans first arguments of `importlib.import_module(...)` / `import_module(...)` / `__import__(...)` calls and resolves them exactly — precise, suited to cycle detection. `"all"` scans every string literal that looks like a dotted path (ruff's `analyze.detect-string-imports` parity) — aggressive, suited to dependency-graph use cases. |
+| `string-imports-min-dots` | `int` | `2` | Minimum number of dots a string literal must contain to be considered a module-path candidate. Only applies in `"all"` mode (ignored in `"call-sites"`, where exact resolution is the precision mechanism). Matches ruff's `string-imports-min-dots` default. `0` disables the dot requirement (very aggressive). |
 
 Setting `local-imports = true` is useful when your codebase uses deferred imports (e.g. inside functions) to break runtime cycles, and you want to detect those hidden dependencies too.
 
@@ -110,17 +111,25 @@ You can also enable this for a single run without editing the config by passing 
 
 #### String imports
 
-Some codebases load modules dynamically by name — `importlib.import_module("a.b.c")`, plugin registries, settings module paths — and those edges are invisible to statement-level import extraction. With `string-imports` enabled, Ouroboros scans **every** string literal (like ruff's `analyze.detect-string-imports`, not just `importlib` call sites) and treats any string that looks like a dotted module path as an import candidate:
+Some codebases load modules dynamically by name — `importlib.import_module("a.b.c")`, plugin loaders — and those edges are invisible to statement-level import extraction. With `string-imports` enabled, Ouroboros treats such strings as import candidates. Two modes control how aggressive this is:
+
+**`call-sites` mode (default).** Only string literals passed as the first argument of `importlib.import_module(...)`, `import_module(...)`, or `__import__(...)` count. Candidates must resolve **exactly** to a first-party module or package — there is no prefix shortening, because `import_module("a.b.c.MyClass")` would raise `ModuleNotFoundError` at runtime anyway. `string-imports-min-dots` is ignored in this mode. This is the mode to use for cycle detection.
+
+**`all` mode (ruff parity).** Like ruff's `analyze.detect-string-imports`, **every** string literal is scanned — including registry-style strings in Django settings, DI containers, task-name constants, and `mock.patch` targets:
 
 - The string must have at least `string-imports-min-dots` dots (default 2, matching ruff/Pants) and consist of dot-separated identifier segments. Byte strings (`b"..."`) never count; f-string literal fragments don't count, but strings inside f-string interpolations do; docstrings are scanned like any other string.
-- Candidates are resolved against your first-party modules only. Trailing components may be attributes, so the resolver tries progressively shorter prefixes: `"a.b.c.MyClass"` resolves to `a.b.c`. Prefixes with fewer than `string-imports-min-dots` dots are never tried.
-- Candidates that match no first-party module are **dropped silently** — they are not reported as unresolved imports and never trip `--strict`. A module string-importing itself (e.g. `importlib.import_module(__name__)`, or a docstring naming its own module) is also dropped.
-- String imports compose with `local-imports`: when `local-imports` is off (default), only module-level string literals are scanned; when on, strings inside functions, classes, and control-flow blocks are scanned too. Module-level `def` default arguments and decorators evaluate at import time, so strings there count as module-level.
+- Trailing components may be attributes, so the resolver tries progressively shorter prefixes: `"a.b.c.MyClass"` resolves to `a.b.c`. Prefixes with fewer than `string-imports-min-dots` dots are never tried.
+- Warning: on large codebases with module-path registries, `all` mode can fuse much of the graph into one giant SCC. Prefer it for dependency-graph/impact analysis, not cycle gating.
+
+In both modes:
+
+- Candidates that match no first-party module are **dropped silently** — they are not reported as unresolved imports and never trip `--strict`. A module string-importing itself (e.g. `importlib.import_module(__name__)`) is also dropped.
+- String imports compose with `local-imports`: when `local-imports` is off (default), only module-level strings are scanned; when on, strings inside functions, classes, and control-flow blocks are scanned too. Module-level `def` default arguments and decorators evaluate at import time, so strings there count as module-level.
 
 ```toml
 [parse]
 string-imports = true
-string-imports-min-dots = 2
+string-imports-mode = "call-sites"
 ```
 
 You can also enable string imports for a single run with `--include-string-imports`, which forces the option on and takes precedence over the config value.

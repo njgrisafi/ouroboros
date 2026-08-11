@@ -376,6 +376,7 @@ fn main() {
             let extract_options = parser::ExtractOptions {
                 include_local: config.parse.local_imports,
                 string_imports: config.parse.string_imports,
+                string_imports_mode: config.parse.string_imports_mode,
                 string_imports_min_dots: config.parse.string_imports_min_dots,
             };
             match parser::extract_imports(&source, &extract_options) {

@@ -13,7 +13,7 @@ Designed for large monorepos with millions of lines of code.
 - Resolves imports against a first-party module index
 - Accounts for ancestor package `__init__.py` execution (importing `a.b.c` also depends on `a` and `a.b`); toggle with `include-ancestor-init` / `--no-include-ancestor-init`
 - Detect self-tree cycles closing through an eager parent `__init__.py` (opt-in `--include-self-ancestor-init`)
-- Detect string literals that look like module paths (ruff-style "string imports", e.g. `importlib.import_module("a.b.c")`; opt-in `--include-string-imports`)
+- Detect dynamic imports by string (`importlib.import_module("a.b.c")`; opt-in `--include-string-imports`, with a ruff-parity scan-every-string mode for dependency-graph analysis)
 - Builds a compact file-level dependency graph
 - Detects circular dependencies via strongly connected components (SCCs)
 - Configurable SCC size filtering, local-import inclusion, and source roots

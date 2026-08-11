@@ -331,6 +331,7 @@ mod tests {
         ResolveOptions {
             include_ancestor_init,
             source_is_package,
+            string_imports_mode: crate::parser::StringImportsMode::CallSites,
             string_imports_min_dots: crate::parser::DEFAULT_STRING_IMPORTS_MIN_DOTS,
         }
     }

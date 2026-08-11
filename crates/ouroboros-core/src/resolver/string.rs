@@ -4,7 +4,7 @@
 use super::index::ModuleIndex;
 use super::resolve::push_ancestor_package_deps;
 use super::{ResolveOptions, ResolvedDep, SuppressedAncestorEdge};
-use crate::parser::RawImport;
+use crate::parser::{RawImport, StringImportsMode};
 
 /// Resolve a string-literal import candidate.
 ///
@@ -57,12 +57,18 @@ fn resolve_candidate(
     deps: &mut Vec<ResolvedDep>,
     suppressed: &mut Vec<SuppressedAncestorEdge>,
 ) {
+    // In CallSites mode the string is the argument of import_module /
+    // __import__, which requires the full dotted path to be importable — so
+    // only the exact string may resolve. In All mode, trailing components may
+    // be attributes, so progressively shorter prefixes are tried (ruff
+    // parity), stopping before prefixes with fewer than min_dots dots.
     let components: Vec<&str> = candidate.split('.').collect();
-    // Try the full path and progressively shorter prefixes, stopping before
-    // prefixes with fewer than min_dots dots (len - 1 >= min_dots).
-    let tries = components
-        .len()
-        .saturating_sub(options.string_imports_min_dots);
+    let tries = match options.string_imports_mode {
+        StringImportsMode::CallSites => 1,
+        StringImportsMode::All => components
+            .len()
+            .saturating_sub(options.string_imports_min_dots),
+    };
     for len in (1..=components.len()).rev().take(tries) {
         let prefix = components[..len].join(".");
         if !index.contains(&prefix) {
@@ -127,7 +133,15 @@ mod tests {
         ResolveOptions {
             include_ancestor_init,
             source_is_package: false,
+            string_imports_mode: StringImportsMode::All,
             string_imports_min_dots: 2,
+        }
+    }
+
+    fn callsite_options() -> ResolveOptions {
+        ResolveOptions {
+            string_imports_mode: StringImportsMode::CallSites,
+            ..options(false)
         }
     }
 
@@ -285,5 +299,60 @@ mod tests {
         let (deps, _) = resolve("x", "a.b.c", &index, &options(false));
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].target, "a.b.c");
+    }
+
+    // --- call-sites mode: exact resolution only ---
+
+    #[test]
+    fn call_sites_exact_hit() {
+        let index = make_index(&["a.b.c"]);
+        let (deps, _) = resolve("other", "a.b.c", &index, &callsite_options());
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].target, "a.b.c");
+    }
+
+    #[test]
+    fn call_sites_no_shortening_to_module() {
+        // import_module("a.b.c.MyClass") fails at runtime unless MyClass is a
+        // submodule — no fallback to "a.b.c".
+        let index = make_index(&["a.b.c"]);
+        let (deps, _) = resolve("other", "a.b.c.MyClass", &index, &callsite_options());
+        assert!(
+            deps.is_empty(),
+            "call-sites mode must not shorten: {deps:?}"
+        );
+    }
+
+    #[test]
+    fn call_sites_no_shortening_to_package() {
+        // The group_id-style false positive: "pkg.sub.nonexistent.func" must
+        // not fall back to the "pkg.sub" package __init__.
+        let index = make_index(&["pkg.sub", "pkg.sub.real"]);
+        let (deps, _) = resolve(
+            "other",
+            "pkg.sub.nonexistent.func",
+            &index,
+            &callsite_options(),
+        );
+        assert!(
+            deps.is_empty(),
+            "call-sites mode must not shorten to a package: {deps:?}"
+        );
+    }
+
+    #[test]
+    fn call_sites_exact_package_hit_counts() {
+        // import_module("pkg.sub") on a real package is a genuine import.
+        let index = make_index(&["pkg.sub"]);
+        let (deps, _) = resolve("other", "pkg.sub", &index, &callsite_options());
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].target, "pkg.sub");
+    }
+
+    #[test]
+    fn call_sites_self_edge_dropped() {
+        let index = make_index(&["a.b.c"]);
+        let (deps, _) = resolve("a.b.c", "a.b.c", &index, &callsite_options());
+        assert!(deps.is_empty());
     }
 }

@@ -1,8 +1,9 @@
 use rustpython_parser::ast::{
-    Arguments, Constant, Expr, Keyword, MatchCase, Stmt, Suite, Visitor, WithItem,
+    Arguments, Constant, Expr, ExprCall, Keyword, MatchCase, Stmt, Suite, Visitor, WithItem,
 };
+use rustpython_parser::text_size::TextSize;
 
-use super::{ExtractOptions, ImportKind, ImportedName, RawImport};
+use super::{ExtractOptions, ImportKind, ImportedName, RawImport, StringImportsMode};
 
 /// Maps byte offsets in source to 1-indexed line numbers.
 struct LineMap {
@@ -82,6 +83,41 @@ impl ImportCollector<'_> {
     fn line_for(&self, offset: u32) -> u32 {
         self.line_map.line_for_offset(offset as usize)
     }
+
+    /// Validate and record a string literal as a module-path candidate.
+    ///
+    /// In `CallSites` mode the dot requirement is dropped (`min_dots = 0`):
+    /// exact resolution in the resolver is the precision mechanism there, and
+    /// `import_module("plugins")` on a single-segment module is legitimate.
+    fn push_string_candidate(&mut self, value: &str, start: TextSize) {
+        let min_dots = match self.options.string_imports_mode {
+            StringImportsMode::All => self.options.string_imports_min_dots,
+            StringImportsMode::CallSites => 0,
+        };
+        if let Some(candidate) = string_import_candidate(value, min_dots) {
+            let line = self.line_for(u32::from(start));
+            self.imports.push(RawImport {
+                kind: ImportKind::StringImport,
+                module: None,
+                names: vec![ImportedName {
+                    name: candidate,
+                    asname: None,
+                }],
+                level: 0,
+                line,
+            });
+        }
+    }
+}
+
+/// Whether a call is `import_module(...)` (bare or `importlib.import_module`)
+/// or `__import__(...)` — the two stdlib dynamic-import entry points.
+fn is_dynamic_import_call(call: &ExprCall) -> bool {
+    match call.func.as_ref() {
+        Expr::Name(name) => matches!(&*name.id, "import_module" | "__import__"),
+        Expr::Attribute(attr) => &*attr.attr == "import_module",
+        _ => false,
+    }
 }
 
 impl Visitor for ImportCollector<'_> {
@@ -140,23 +176,25 @@ impl Visitor for ImportCollector<'_> {
         if !self.options.string_imports {
             return;
         }
-        if self.at_included_depth()
-            && let Expr::Constant(constant) = &node
-            && let Constant::Str(value) = &constant.value
-            && let Some(candidate) =
-                string_import_candidate(value, self.options.string_imports_min_dots)
-        {
-            let line = self.line_for(u32::from(constant.range.start()));
-            self.imports.push(RawImport {
-                kind: ImportKind::StringImport,
-                module: None,
-                names: vec![ImportedName {
-                    name: candidate,
-                    asname: None,
-                }],
-                level: 0,
-                line,
-            });
+        match self.options.string_imports_mode {
+            StringImportsMode::All => {
+                if self.at_included_depth()
+                    && let Expr::Constant(constant) = &node
+                    && let Constant::Str(value) = &constant.value
+                {
+                    self.push_string_candidate(value, constant.range.start());
+                }
+            }
+            StringImportsMode::CallSites => {
+                if self.at_included_depth()
+                    && let Expr::Call(call) = &node
+                    && is_dynamic_import_call(call)
+                    && let Some(Expr::Constant(constant)) = call.args.first()
+                    && let Constant::Str(value) = &constant.value
+                {
+                    self.push_string_candidate(value, constant.range.start());
+                }
+            }
         }
         match node {
             // f-string literal fragments are not candidates (a middle fragment
@@ -257,6 +295,7 @@ mod tests {
         collect_imports(suite, source, &options)
     }
 
+    /// String-import candidates in `All` mode with the given min-dots.
     fn parse_and_collect_strings(
         source: &str,
         include_local: bool,
@@ -266,7 +305,20 @@ mod tests {
         let options = ExtractOptions {
             include_local,
             string_imports: true,
+            string_imports_mode: StringImportsMode::All,
             string_imports_min_dots: min_dots,
+        };
+        collect_imports(suite, source, &options)
+    }
+
+    /// String-import candidates in `CallSites` mode.
+    fn parse_and_collect_call_sites(source: &str, include_local: bool) -> Vec<RawImport> {
+        let suite = ast::Suite::parse(source, "<test>").expect("source should parse");
+        let options = ExtractOptions {
+            include_local,
+            string_imports: true,
+            string_imports_mode: StringImportsMode::CallSites,
+            string_imports_min_dots: DEFAULT_STRING_IMPORTS_MIN_DOTS,
         };
         collect_imports(suite, source, &options)
     }
@@ -276,6 +328,15 @@ mod tests {
         parse_and_collect_strings(source, false, DEFAULT_STRING_IMPORTS_MIN_DOTS)
             .into_iter()
             .filter(|imp| imp.kind == ImportKind::StringImport)
+            .collect()
+    }
+
+    /// Call-site candidates at module level, names only.
+    fn collect_call_site_names(source: &str) -> Vec<String> {
+        parse_and_collect_call_sites(source, false)
+            .into_iter()
+            .filter(|imp| imp.kind == ImportKind::StringImport)
+            .map(|imp| imp.names[0].name.clone())
             .collect()
     }
 
@@ -827,6 +888,84 @@ match x:
         let imports = collect_strings(source);
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].names[0].name, "a.b.c");
+    }
+
+    // --- call-sites mode ---
+
+    #[test]
+    fn call_sites_detects_importlib_attribute_call() {
+        let names = collect_call_site_names("mod = importlib.import_module(\"a.b.c\")\n");
+        assert_eq!(names, vec!["a.b.c"]);
+    }
+
+    #[test]
+    fn call_sites_detects_bare_import_module() {
+        let source = "from importlib import import_module\nmod = import_module(\"a.b.c\")\n";
+        let names = collect_call_site_names(source);
+        assert_eq!(names, vec!["a.b.c"]);
+    }
+
+    #[test]
+    fn call_sites_detects_dunder_import() {
+        let names = collect_call_site_names("mod = __import__(\"a.b.c\")\n");
+        assert_eq!(names, vec!["a.b.c"]);
+    }
+
+    #[test]
+    fn call_sites_ignores_registry_strings() {
+        // The ruff-style "all" mode flags these; call-sites mode must not.
+        let source = "\
+SETTINGS_MODULE = \"my.pkg.settings\"
+REGISTRY = {\"a.b.c\": 1}
+TASK = \"tasks.send_email\"
+";
+        assert!(collect_call_site_names(source).is_empty());
+    }
+
+    #[test]
+    fn call_sites_ignores_non_first_args_and_other_calls() {
+        let source = "\
+load(\"a.b.c\")                      # not a dynamic-import call
+import_module(name=\"d.e.f\")         # keyword-only: not scanned
+register(\"x\", \"g.h.i\")              # second arg
+";
+        assert!(collect_call_site_names(source).is_empty());
+    }
+
+    #[test]
+    fn call_sites_single_segment_allowed() {
+        // min-dots is ignored in call-sites mode: import_module("plugins") is
+        // a legitimate dynamic import of a single-segment module.
+        let names = collect_call_site_names("import_module(\"plugins\")\n");
+        assert_eq!(names, vec!["plugins"]);
+    }
+
+    #[test]
+    fn call_sites_nested_call_respects_local_imports_gate() {
+        let source = "\
+def load():
+    return importlib.import_module(\"a.b.c\")
+";
+        assert!(collect_call_site_names(source).is_empty());
+
+        let with_local: Vec<_> = parse_and_collect_call_sites(source, true)
+            .into_iter()
+            .filter(|imp| imp.kind == ImportKind::StringImport)
+            .collect();
+        assert_eq!(with_local.len(), 1);
+        assert_eq!(with_local[0].names[0].name, "a.b.c");
+    }
+
+    #[test]
+    fn call_sites_variable_first_arg_not_scanned() {
+        let source = "name = \"a.b.c\"\nimport_module(name)\n";
+        assert!(collect_call_site_names(source).is_empty());
+    }
+
+    #[test]
+    fn call_sites_fstring_first_arg_not_scanned() {
+        let names = collect_call_site_names("import_module(f\"a.b.{suffix}\")\n");
+        assert!(names.is_empty());
     }
 
     #[test]

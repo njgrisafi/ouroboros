@@ -63,6 +63,28 @@ pub struct RawImport {
     pub line: u32,
 }
 
+/// Which string literals are considered module-path candidates when
+/// string-import detection is enabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+pub enum StringImportsMode {
+    /// Only string literals passed as the first argument of
+    /// `importlib.import_module(...)` / `import_module(...)` /
+    /// `__import__(...)` calls. Precise: candidates resolve exactly (no
+    /// prefix shortening) and `string_imports_min_dots` is ignored, since
+    /// exact resolution against the module index is the safety mechanism.
+    /// Suited to cycle detection.
+    #[default]
+    #[serde(rename = "call-sites")]
+    CallSites,
+    /// Every string literal that looks like a dotted module path (ruff's
+    /// `analyze.detect-string-imports` parity). Aggressive: registry-style
+    /// strings (Django settings, DI containers, task-name constants,
+    /// `mock.patch` targets) all become edges. Suited to dependency-graph
+    /// use cases where over-approximation is acceptable.
+    #[serde(rename = "all")]
+    All,
+}
+
 /// Options controlling import extraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExtractOptions {
@@ -70,12 +92,15 @@ pub struct ExtractOptions {
     /// inside functions, classes, and control-flow blocks ("local" imports).
     pub include_local: bool,
     /// Whether to detect string literals that look like module paths
-    /// (ruff-style "string imports"). Respects the same nesting gate as
+    /// ("string imports"). Respects the same nesting gate as
     /// `include_local`: when `include_local` is off, only module-level
     /// string literals are scanned.
     pub string_imports: bool,
+    /// Which string literals count as candidates. See [`StringImportsMode`].
+    pub string_imports_mode: StringImportsMode,
     /// Minimum number of dots for a string literal to be considered a
-    /// module-path candidate. Only relevant when `string_imports` is on.
+    /// module-path candidate. Only relevant in [`StringImportsMode::All`];
+    /// ignored in `CallSites` mode, where candidates resolve exactly.
     pub string_imports_min_dots: usize,
 }
 
@@ -84,6 +109,7 @@ impl Default for ExtractOptions {
         Self {
             include_local: false,
             string_imports: false,
+            string_imports_mode: StringImportsMode::default(),
             string_imports_min_dots: DEFAULT_STRING_IMPORTS_MIN_DOTS,
         }
     }

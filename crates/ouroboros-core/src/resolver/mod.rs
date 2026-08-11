@@ -66,8 +66,11 @@ pub struct ResolveOptions {
     /// Whether the importing file is itself a package `__init__.py` (affects
     /// relative-import resolution).
     pub source_is_package: bool,
+    /// Which string literals were scanned; controls whether candidates
+    /// resolve exactly (`CallSites`) or with prefix shortening (`All`).
+    pub string_imports_mode: crate::parser::StringImportsMode,
     /// Minimum dots for string-import candidates; bounds the prefix
-    /// shortening applied to candidates like `"a.b.c.MyClass"`.
+    /// shortening applied to candidates like `"a.b.c.MyClass"` in `All` mode.
     pub string_imports_min_dots: usize,
 }
 
@@ -123,6 +126,7 @@ pub fn resolve_all(
     let extract_options = crate::parser::ExtractOptions {
         include_local: config.parse.local_imports,
         string_imports: config.parse.string_imports,
+        string_imports_mode: config.parse.string_imports_mode,
         string_imports_min_dots: config.parse.string_imports_min_dots,
     };
     let mut all_deps = Vec::new();
@@ -150,6 +154,7 @@ pub fn resolve_all(
             let resolve_options = ResolveOptions {
                 include_ancestor_init: config.resolve.include_ancestor_init,
                 source_is_package,
+                string_imports_mode: config.parse.string_imports_mode,
                 string_imports_min_dots: config.parse.string_imports_min_dots,
             };
             let resolution = resolve_file(&file.module_name, &imports, index, &resolve_options);

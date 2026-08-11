@@ -1,6 +1,8 @@
 use serde::Deserialize;
 use std::fmt;
 
+use crate::parser::StringImportsMode;
+
 /// Errors that can occur when loading or validating a config.
 #[derive(Debug)]
 pub enum ConfigError {
@@ -78,13 +80,21 @@ pub struct ParseConfig {
     pub string_imports: bool,
 
     /// Minimum number of dots for a string literal to be considered a
-    /// module-path candidate. Only relevant when `string-imports` is on.
+    /// module-path candidate. Only relevant in `string-imports-mode = "all"`;
+    /// ignored in `"call-sites"` mode, where candidates resolve exactly.
     /// Defaults to 2 (matches ruff/Pants); `0` disables the dot requirement.
     #[serde(
         rename = "string-imports-min-dots",
         default = "default_string_imports_min_dots"
     )]
     pub string_imports_min_dots: usize,
+
+    /// Which string literals count as module-path candidates:
+    /// `"call-sites"` (default) only scans first arguments of
+    /// `import_module`/`__import__` calls; `"all"` scans every string
+    /// literal (ruff parity, aggressive).
+    #[serde(rename = "string-imports-mode", default)]
+    pub string_imports_mode: StringImportsMode,
 }
 
 fn default_string_imports_min_dots() -> usize {
@@ -97,6 +107,7 @@ impl Default for ParseConfig {
             local_imports: false,
             string_imports: false,
             string_imports_min_dots: default_string_imports_min_dots(),
+            string_imports_mode: StringImportsMode::default(),
         }
     }
 }
@@ -438,6 +449,43 @@ string-imports-min-dots = 0
 "#;
         let config = Config::from_toml(toml_str).unwrap();
         assert_eq!(config.parse.string_imports_min_dots, 0);
+    }
+
+    #[test]
+    fn string_imports_mode_defaults_to_call_sites() {
+        let toml_str = r#"source-roots = ["src"]"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert_eq!(
+            config.parse.string_imports_mode,
+            crate::parser::StringImportsMode::CallSites
+        );
+    }
+
+    #[test]
+    fn string_imports_mode_all() {
+        let toml_str = r#"
+source-roots = ["src"]
+
+[parse]
+string-imports = true
+string-imports-mode = "all"
+"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert_eq!(
+            config.parse.string_imports_mode,
+            crate::parser::StringImportsMode::All
+        );
+    }
+
+    #[test]
+    fn string_imports_mode_invalid_rejected() {
+        let toml_str = r#"
+source-roots = ["src"]
+
+[parse]
+string-imports-mode = "everything"
+"#;
+        assert!(Config::from_toml(toml_str).is_err());
     }
 
     #[test]
