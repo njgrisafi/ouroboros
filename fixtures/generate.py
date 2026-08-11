@@ -220,6 +220,10 @@ BASE_FILES: dict[str, str] = {
     "services/auth/tokens.py": textwrap.dedent("""\
         import secrets
 
+        # Dotted-path string referencing a first-party module; becomes a
+        # dependency edge only with --include-string-imports.
+        EMAIL_MODULE = "services.notifications.email"
+
 
         def generate_token(length: int = 32) -> str:
             import hashlib  # local import
@@ -677,6 +681,8 @@ def generate(scale: int = 1, seed: int = 42) -> None:
         "\n"
         "[parse]\n"
         "local-imports = false\n"
+        "string-imports = false\n"
+        "string-imports-min-dots = 2\n"
         "\n"
         "[cycles]\n"
         "min-scc-size = 2\n"

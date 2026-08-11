@@ -1,0 +1,6 @@
+source-roots = ["src"]
+
+[cycles]
+# min-scc-size 1 would surface self-loop "cycles"; string self-edges are
+# dropped by the resolver, so this must stay cycle-free for self-strings.
+min-scc-size = 1

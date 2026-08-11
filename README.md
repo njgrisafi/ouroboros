@@ -13,6 +13,7 @@ Designed for large monorepos with millions of lines of code.
 - Resolves imports against a first-party module index
 - Accounts for ancestor package `__init__.py` execution (importing `a.b.c` also depends on `a` and `a.b`); toggle with `include-ancestor-init` / `--no-include-ancestor-init`
 - Detect self-tree cycles closing through an eager parent `__init__.py` (opt-in `--include-self-ancestor-init`)
+- Detect dynamic imports by string (`importlib.import_module("a.b.c")`; opt-in `--include-string-imports`, with a ruff-parity scan-every-string mode for dependency-graph analysis)
 - Builds a compact file-level dependency graph
 - Detects circular dependencies via strongly connected components (SCCs)
 - Configurable SCC size filtering, local-import inclusion, and source roots
@@ -75,7 +76,7 @@ oboros --config path/to/oboros.toml
 All CLI flags:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--include-self-ancestor-init] [--local-imports] [--strict] [--no-include-ancestor-init] [--exclude <PATH>] [--write]
+oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--include-self-ancestor-init] [--local-imports] [--include-string-imports] [--strict] [--no-include-ancestor-init] [--exclude <PATH>] [--write]
 ```
 
 See [USAGE.md](USAGE.md) for the full configuration reference and detailed usage instructions.

@@ -3,7 +3,10 @@ use crate::parser::{ImportKind, RawImport};
 use super::error::ResolveError;
 use super::index::ModuleIndex;
 use super::relative::resolve_relative;
-use super::{FileResolution, ResolvedDep, SuppressedAncestorEdge, UnresolvedImport};
+use super::string::resolve_string_import;
+use super::{
+    FileResolution, ResolveOptions, ResolvedDep, SuppressedAncestorEdge, UnresolvedImport,
+};
 
 /// Resolve all imports from a single file against the first-party module index.
 ///
@@ -18,8 +21,7 @@ pub(crate) fn resolve_file_imports(
     source_module: &str,
     imports: &[RawImport],
     index: &ModuleIndex,
-    include_ancestor_init: bool,
-    source_is_package: bool,
+    options: &ResolveOptions,
 ) -> FileResolution {
     let mut deps = Vec::new();
     let mut unresolved = Vec::new();
@@ -34,7 +36,7 @@ pub(crate) fn resolve_file_imports(
                     index,
                     &mut deps,
                     &mut unresolved,
-                    include_ancestor_init,
+                    options,
                     &mut suppressed,
                 );
             }
@@ -45,8 +47,17 @@ pub(crate) fn resolve_file_imports(
                     index,
                     &mut deps,
                     &mut unresolved,
-                    include_ancestor_init,
-                    source_is_package,
+                    options,
+                    &mut suppressed,
+                );
+            }
+            ImportKind::StringImport => {
+                resolve_string_import(
+                    source_module,
+                    imp,
+                    index,
+                    options,
+                    &mut deps,
                     &mut suppressed,
                 );
             }
@@ -90,7 +101,7 @@ fn is_ancestor_or_self(candidate: &str, module: &str) -> bool {
 /// bogus `P <-> P.child` cycle whenever `P/__init__.py` re-exports a
 /// submodule. Cross-tree ancestor edges (e.g. `foo.x` importing `bar.y` yields
 /// an edge to `bar`) are real and preserved.
-fn push_ancestor_package_deps(
+pub(super) fn push_ancestor_package_deps(
     source_module: &str,
     target: &str,
     line: u32,
@@ -138,7 +149,7 @@ fn resolve_import_stmt(
     index: &ModuleIndex,
     deps: &mut Vec<ResolvedDep>,
     unresolved: &mut Vec<UnresolvedImport>,
-    include_ancestor_init: bool,
+    options: &ResolveOptions,
     suppressed: &mut Vec<SuppressedAncestorEdge>,
 ) {
     for name in &imp.names {
@@ -148,7 +159,7 @@ fn resolve_import_stmt(
                 target: name.name.clone(),
                 line: imp.line,
             });
-            if include_ancestor_init {
+            if options.include_ancestor_init {
                 push_ancestor_package_deps(
                     source_module,
                     &name.name,
@@ -172,15 +183,13 @@ fn resolve_import_stmt(
 /// For relative imports (level > 0), first resolves to an absolute path.
 /// Then checks whether the module itself, or `module.name` for each imported
 /// name, is in the index.
-#[allow(clippy::too_many_arguments)]
 fn resolve_import_from_stmt(
     source_module: &str,
     imp: &RawImport,
     index: &ModuleIndex,
     deps: &mut Vec<ResolvedDep>,
     unresolved: &mut Vec<UnresolvedImport>,
-    include_ancestor_init: bool,
-    source_is_package: bool,
+    options: &ResolveOptions,
     suppressed: &mut Vec<SuppressedAncestorEdge>,
 ) {
     // Step 1: Determine the absolute module path.
@@ -188,7 +197,7 @@ fn resolve_import_from_stmt(
         // Relative import — resolve to absolute. Inside a package's
         // `__init__.py`, a leading dot refers to the package itself, so one
         // fewer level is stripped than for a regular module.
-        let effective_level = if source_is_package {
+        let effective_level = if options.source_is_package {
             imp.level.saturating_sub(1)
         } else {
             imp.level
@@ -236,7 +245,7 @@ fn resolve_import_from_stmt(
         };
 
         if index.contains(&qualified) {
-            if include_ancestor_init {
+            if options.include_ancestor_init {
                 push_ancestor_package_deps(
                     source_module,
                     &qualified,
@@ -258,7 +267,7 @@ fn resolve_import_from_stmt(
     // If no imported names resolved as submodules, the names must be symbols
     // inside the base module — add the base module itself as the dependency.
     if !any_resolved && !base_module.is_empty() && index.contains(&base_module) {
-        if include_ancestor_init {
+        if options.include_ancestor_init {
             push_ancestor_package_deps(
                 source_module,
                 &base_module,
@@ -318,6 +327,15 @@ mod tests {
         }
     }
 
+    fn opts(include_ancestor_init: bool, source_is_package: bool) -> ResolveOptions {
+        ResolveOptions {
+            include_ancestor_init,
+            source_is_package,
+            string_imports_mode: crate::parser::StringImportsMode::CallSites,
+            string_imports_min_dots: crate::parser::DEFAULT_STRING_IMPORTS_MIN_DOTS,
+        }
+    }
+
     #[test]
     fn absolute_import_first_party() {
         let index = make_index(&["core.engine", "models.user"]);
@@ -329,7 +347,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false, false);
+        let result = resolve_file_imports("app", &imports, &index, &opts(false, false));
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].source, "app");
         assert_eq!(result.deps[0].target, "core.engine");
@@ -347,7 +365,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false, false);
+        let result = resolve_file_imports("app", &imports, &index, &opts(false, false));
         assert!(result.deps.is_empty());
         assert_eq!(result.unresolved.len(), 1);
         assert_eq!(result.unresolved[0].import_path, "os");
@@ -364,7 +382,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false, false);
+        let result = resolve_file_imports("app", &imports, &index, &opts(false, false));
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
         assert!(result.unresolved.is_empty());
@@ -382,7 +400,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false, false);
+        let result = resolve_file_imports("app", &imports, &index, &opts(false, false));
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "models.user");
         assert!(result.unresolved.is_empty());
@@ -399,7 +417,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false, false);
+        let result = resolve_file_imports("app", &imports, &index, &opts(false, false));
         assert!(result.deps.is_empty());
         assert_eq!(result.unresolved.len(), 1);
         assert_eq!(result.unresolved[0].import_path, "os");
@@ -416,7 +434,8 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("services.auth.login", &imports, &index, false, false);
+        let result =
+            resolve_file_imports("services.auth.login", &imports, &index, &opts(false, false));
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "services.auth.session");
     }
@@ -432,7 +451,12 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("services.auth.tokens", &imports, &index, false, false);
+        let result = resolve_file_imports(
+            "services.auth.tokens",
+            &imports,
+            &index,
+            &opts(false, false),
+        );
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "services.notifications.email");
     }
@@ -448,7 +472,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("core.runner", &imports, &index, false, false);
+        let result = resolve_file_imports("core.runner", &imports, &index, &opts(false, false));
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
     }
@@ -464,7 +488,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false, false);
+        let result = resolve_file_imports("app", &imports, &index, &opts(false, false));
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert_eq!(targets.len(), 2);
         assert!(targets.contains(&"models.user"));
@@ -484,7 +508,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false, false);
+        let result = resolve_file_imports("app", &imports, &index, &opts(false, false));
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
         assert!(result.unresolved.is_empty());
@@ -501,7 +525,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false, false);
+        let result = resolve_file_imports("app", &imports, &index, &opts(false, false));
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "models");
         assert!(result.unresolved.is_empty());
@@ -518,7 +542,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg.mod", &imports, &index, false, false);
+        let result = resolve_file_imports("pkg.mod", &imports, &index, &opts(false, false));
         assert!(result.deps.is_empty());
         assert_eq!(result.unresolved.len(), 1);
         assert!(result.unresolved[0].import_path.contains("..."));
@@ -551,7 +575,7 @@ mod tests {
             },
         ];
 
-        let result = resolve_file_imports("app", &imports, &index, false, false);
+        let result = resolve_file_imports("app", &imports, &index, &opts(false, false));
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
         assert_eq!(result.unresolved.len(), 2);
@@ -568,7 +592,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, false, false);
+        let result = resolve_file_imports("app", &imports, &index, &opts(false, false));
         assert_eq!(result.deps.len(), 1);
         assert_eq!(result.deps[0].target, "core.engine");
     }
@@ -576,7 +600,7 @@ mod tests {
     #[test]
     fn empty_imports() {
         let index = make_index(&["core.engine"]);
-        let result = resolve_file_imports("app", &[], &index, false, false);
+        let result = resolve_file_imports("app", &[], &index, &opts(false, false));
         assert!(result.deps.is_empty());
         assert!(result.unresolved.is_empty());
     }
@@ -592,7 +616,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg.services", &imports, &index, false, true);
+        let result = resolve_file_imports("pkg.services", &imports, &index, &opts(false, true));
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert_eq!(targets, vec!["pkg.services.staff_service"]);
         assert!(result.unresolved.is_empty());
@@ -609,7 +633,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg.services", &imports, &index, false, true);
+        let result = resolve_file_imports("pkg.services", &imports, &index, &opts(false, true));
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert_eq!(targets, vec!["pkg.services.staff_service"]);
         assert!(result.unresolved.is_empty());
@@ -626,7 +650,8 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg.services.api", &imports, &index, false, false);
+        let result =
+            resolve_file_imports("pkg.services.api", &imports, &index, &opts(false, false));
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert_eq!(targets, vec!["pkg.services.staff_service"]);
         assert!(result.unresolved.is_empty());
@@ -643,7 +668,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg.services", &imports, &index, false, false);
+        let result = resolve_file_imports("pkg.services", &imports, &index, &opts(false, false));
         assert!(result.deps.is_empty());
         assert_eq!(result.unresolved.len(), 1);
     }
@@ -659,7 +684,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("x", &imports, &index, true, false);
+        let result = resolve_file_imports("x", &imports, &index, &opts(true, false));
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert!(targets.contains(&"a.b.c"));
         assert!(targets.contains(&"a.b"));
@@ -678,7 +703,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("x", &imports, &index, true, false);
+        let result = resolve_file_imports("x", &imports, &index, &opts(true, false));
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert!(targets.contains(&"a.b.c"));
         assert!(targets.contains(&"a.b"));
@@ -697,7 +722,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("a.b", &imports, &index, true, false);
+        let result = resolve_file_imports("a.b", &imports, &index, &opts(true, false));
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         // `a` and `a.b` are ancestors of the source `a.b`, already initialized
         // on its own import path, so neither gets a synthetic ancestor edge.
@@ -720,7 +745,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg.sub.child", &imports, &index, true, false);
+        let result = resolve_file_imports("pkg.sub.child", &imports, &index, &opts(true, false));
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert!(targets.contains(&"pkg.sub.other"));
         assert!(!targets.contains(&"pkg.sub"));
@@ -741,7 +766,8 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("bar.models.entity", &imports, &index, true, false);
+        let result =
+            resolve_file_imports("bar.models.entity", &imports, &index, &opts(true, false));
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert!(targets.contains(&"foo.core.util"));
         assert!(targets.contains(&"foo.core"));
@@ -759,7 +785,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("other", &imports, &index, true, false);
+        let result = resolve_file_imports("other", &imports, &index, &opts(true, false));
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert!(targets.contains(&"pkg.sub.leaf"));
         assert!(targets.contains(&"pkg.sub"));
@@ -777,7 +803,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("app", &imports, &index, true, false);
+        let result = resolve_file_imports("app", &imports, &index, &opts(true, false));
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert!(targets.contains(&"models.user"));
         assert!(targets.contains(&"models.base"));
@@ -795,7 +821,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("x", &imports, &index, false, false);
+        let result = resolve_file_imports("x", &imports, &index, &opts(false, false));
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert_eq!(targets, vec!["a.b.c"]);
     }
@@ -811,7 +837,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg.sub.child", &imports, &index, true, false);
+        let result = resolve_file_imports("pkg.sub.child", &imports, &index, &opts(true, false));
 
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert!(targets.contains(&"pkg.sub.other"));
@@ -838,7 +864,8 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("bar.models.entity", &imports, &index, true, false);
+        let result =
+            resolve_file_imports("bar.models.entity", &imports, &index, &opts(true, false));
 
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert!(targets.contains(&"foo.core.util"));
@@ -860,7 +887,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("x", &imports, &index, false, false);
+        let result = resolve_file_imports("x", &imports, &index, &opts(false, false));
         assert!(result.suppressed_ancestor_edges.is_empty());
     }
 
@@ -875,7 +902,7 @@ mod tests {
             line: 0,
         }];
 
-        let result = resolve_file_imports("pkg", &imports, &index, true, true);
+        let result = resolve_file_imports("pkg", &imports, &index, &opts(true, true));
 
         let targets: Vec<&str> = result.deps.iter().map(|d| d.target.as_str()).collect();
         assert!(targets.contains(&"pkg.child"));

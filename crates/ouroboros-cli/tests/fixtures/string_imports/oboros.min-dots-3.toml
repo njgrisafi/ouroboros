@@ -1,0 +1,5 @@
+source-roots = ["src"]
+
+[parse]
+string-imports-mode = "all"
+string-imports-min-dots = 3

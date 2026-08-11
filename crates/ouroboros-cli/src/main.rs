@@ -130,6 +130,14 @@ struct Cli {
     /// Opt-in; default off. Overrides [parse] local-imports.
     #[arg(long = "local-imports")]
     local_imports: bool,
+
+    /// Also treat string literals that look like module paths as imports
+    /// (e.g. importlib.import_module("a.b.c")). Respects --local-imports for
+    /// whether strings nested inside functions/classes are scanned.
+    /// Opt-in; default off. Overrides [parse] string-imports; configure the
+    /// minimum dots with [parse] string-imports-min-dots.
+    #[arg(long = "include-string-imports")]
+    include_string_imports: bool,
 }
 
 /// Walk upward from `start` looking for `oboros.toml`.
@@ -287,6 +295,10 @@ fn main() {
         config.parse.local_imports = true;
     }
 
+    if cli.include_string_imports {
+        config.parse.string_imports = true;
+    }
+
     // Not gated on cyclic_surface_active: this flag affects the main cycle
     // report, not just the cyclic-files surface (unlike ignore-derived-ancestor-init).
     if config.resolve.include_self_ancestor_init && !config.resolve.include_ancestor_init {
@@ -361,7 +373,13 @@ fn main() {
                 }
             };
 
-            match parser::extract_imports(&source, config.parse.local_imports) {
+            let extract_options = parser::ExtractOptions {
+                include_local: config.parse.local_imports,
+                string_imports: config.parse.string_imports,
+                string_imports_mode: config.parse.string_imports_mode,
+                string_imports_min_dots: config.parse.string_imports_min_dots,
+            };
+            match parser::extract_imports(&source, &extract_options) {
                 Ok(imports) if imports.is_empty() => {}
                 Ok(imports) => {
                     if verbose {
@@ -376,6 +394,7 @@ fn main() {
                                 kind = match imp.kind {
                                     parser::ImportKind::Import => "import",
                                     parser::ImportKind::ImportFrom => "from  ",
+                                    parser::ImportKind::StringImport => "string",
                                 },
                                 module = module_part,
                                 names = names.join(", "),
