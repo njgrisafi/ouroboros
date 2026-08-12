@@ -1,3 +1,4 @@
+mod checks;
 mod output;
 mod report;
 
@@ -101,11 +102,24 @@ struct Cli {
     #[arg(long)]
     write: bool,
 
-    /// Compare the configured [cycles] known-cyclic-files list against the
+    /// Compare the configured [cycles] cyclic-files list against the
     /// freshly-computed cyclic-files set; exit 0 if identical, 1 if any
     /// difference (with a human diff on stderr). Independent of --format.
     #[arg(long)]
     check_cyclic_files: bool,
+
+    /// Fail (exit 1) if the number of detected cycles exceeds a budget. The
+    /// budget comes from `--max-cycles` or `[cycles] max-cycles` in
+    /// oboros.toml. Exit 2 if no budget is set or if combined with
+    /// `--check-cyclic-files`. Short-circuits the normal report.
+    #[arg(long)]
+    check_max_cycles: bool,
+
+    /// Budget on the number of cycles allowed (e.g. `9` = allow up to 9
+    /// cycles, fail on the 10th). Overrides `[cycles] max-cycles` in
+    /// config. Only meaningful with `--check-max-cycles`.
+    #[arg(long)]
+    max_cycles: Option<usize>,
 
     /// Include the cyclic-files set as an optional top-level `cyclic_files`
     /// array in the JSON report. No-op in human mode.
@@ -113,7 +127,7 @@ struct Cli {
     show_cyclic_files: bool,
 
     /// When set, files that become cyclic only via a derived ancestor-__init__.py edge
-    /// are excluded from the known-cyclic-files baseline. Overrides
+    /// are excluded from the cyclic-files baseline. Overrides
     /// [cycles] ignore-derived-ancestor-init in config. Baseline-only; does not affect
     /// the normal cycle report.
     #[arg(long = "ignore-derived-ancestor-init")]
@@ -251,6 +265,10 @@ fn main() {
             std::process::exit(2);
         }
     }
+    if cli.check_max_cycles && cli.check_cyclic_files {
+        eprintln!("error: --check-max-cycles cannot be combined with --check-cyclic-files");
+        std::process::exit(2);
+    }
     let write_config_path: Option<PathBuf> = config_path.clone();
 
     let is_human = matches!(cli.format, OutputFormat::Human);
@@ -278,6 +296,11 @@ fn main() {
         }
     };
 
+    // CLI flag overrides config: --max-cycles replaces the configured budget.
+    if let Some(cap) = cli.max_cycles {
+        config.cycles.max_cycles = Some(cap);
+    }
+
     // CLI flag overrides config: --no-include-ancestor-init forces the option off.
     if cli.no_include_ancestor_init {
         config.resolve.include_ancestor_init = false;
@@ -298,6 +321,11 @@ fn main() {
     if cli.include_string_imports {
         config.parse.string_imports = true;
     }
+
+    // Validate the max-cycles budget now that CLI overrides have been folded
+    // into `config`. The combo guard is config-independent and runs earlier
+    // (next to the --write guards); this reads the merged budget.
+    checks::validate_max_cycles_cap(cli.check_max_cycles, &config);
 
     // Not gated on cyclic_surface_active: this flag affects the main cycle
     // report, not just the cyclic-files surface (unlike ignore-derived-ancestor-init).
@@ -591,60 +619,16 @@ fn main() {
 
     spinner.finish_and_clear();
 
-    if cli.check_cyclic_files {
-        use std::collections::BTreeSet;
-
-        let known: BTreeSet<String> = config
+    if cli.check_max_cycles {
+        let cap = config
             .cycles
-            .known_cyclic_files
-            .iter()
-            .map(|s| s.trim().replace('\\', "/"))
-            .collect();
+            .max_cycles
+            .expect("cap presence validated earlier");
+        checks::run_check_max_cycles(cycles.len(), cap);
+    }
 
-        let computed: BTreeSet<String> = cyclic_files
-            .iter()
-            .map(|p| p.display().to_string().replace('\\', "/"))
-            .collect();
-
-        if known == computed {
-            eprintln!("cyclic files unchanged ({} files)", computed.len());
-            return;
-        }
-
-        let added: Vec<&String> = computed
-            .difference(&known)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-        let removed: Vec<&String> = known
-            .difference(&computed)
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
-
-        eprintln!("cyclic files changed:");
-        for path in &added {
-            eprintln!("  + {path}");
-        }
-        for path in &removed {
-            eprintln!("  - {path}");
-        }
-        let all_added_are_prefixed = !added.is_empty()
-            && config.source_roots.iter().any(|root| {
-                let prefix = root.trim_end_matches('/').to_string() + "/";
-                removed
-                    .iter()
-                    .all(|r| added.iter().any(|a| a.as_str() == format!("{prefix}{r}")))
-            });
-        if all_added_are_prefixed {
-            eprintln!(
-                "  hint: known-cyclic-files uses pre-0.6.0 source-root-relative paths; run 'oboros --dump-cyclic-files' to regenerate."
-            );
-        }
-        eprintln!(
-            "run `oboros --dump-cyclic-files` to update [cycles] known-cyclic-files in oboros.toml"
-        );
-        std::process::exit(1);
+    if cli.check_cyclic_files {
+        checks::run_check_cyclic_files(&config, &cyclic_files);
     } else if cli.dump_cyclic_files {
         let paths: Vec<String> = cyclic_files
             .iter()
@@ -655,27 +639,27 @@ fn main() {
                 eprintln!("error: --write requires an existing oboros.toml, but none was found");
                 std::process::exit(2);
             };
-            let old_count = config.cycles.known_cyclic_files.len();
+            let old_count = config.cycles.cyclic_files.len();
             let new_count = paths.len();
             match config_edit::patch_config_file(&config_path, |doc| {
-                config_edit::set_known_cyclic_files(doc, &paths);
+                config_edit::set_cyclic_files(doc, &paths);
             }) {
                 Ok(result) => {
                     if result.changed {
                         eprintln!(
-                            "wrote {}: known-cyclic-files {} entries (was {})",
+                            "wrote {}: cyclic-files {} entries (was {})",
                             result.path.display(),
                             new_count,
                             old_count
                         );
                     } else {
-                        eprintln!("unchanged: known-cyclic-files {new_count} entries");
+                        eprintln!("unchanged: cyclic-files {new_count} entries");
                     }
                     if matches!(cli.format, OutputFormat::Json) {
                         let out = serde_json::json!({
                             "written": result.changed,
                             "path": result.path.display().to_string(),
-                            "known_cyclic_files": new_count,
+                            "cyclic_files": new_count,
                         });
                         println!("{out}");
                     }
@@ -697,9 +681,9 @@ fn main() {
                     println!("ignore-derived-ancestor-init = true");
                 }
                 if paths.is_empty() {
-                    println!("known-cyclic-files = []");
+                    println!("cyclic-files = []");
                 } else {
-                    println!("known-cyclic-files = [");
+                    println!("cyclic-files = [");
                     for path in &paths {
                         println!("    \"{path}\",");
                     }

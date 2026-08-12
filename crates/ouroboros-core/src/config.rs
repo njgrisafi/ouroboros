@@ -110,11 +110,14 @@ pub struct CyclesConfig {
     #[serde(rename = "max-scc-size", default)]
     pub max_scc_size: Option<usize>,
 
+    #[serde(rename = "max-cycles", default)]
+    pub max_cycles: Option<usize>,
+
     #[serde(default)]
     pub ignore: Vec<IgnoredCycle>,
 
-    #[serde(rename = "known-cyclic-files", default)]
-    pub known_cyclic_files: Vec<String>,
+    #[serde(rename = "cyclic-files", default)]
+    pub cyclic_files: Vec<String>,
 
     #[serde(rename = "ignore-derived-ancestor-init", default)]
     pub ignore_derived_ancestor_init: bool,
@@ -132,8 +135,9 @@ impl Default for CyclesConfig {
         CyclesConfig {
             min_scc_size: default_min_scc_size(),
             max_scc_size: None,
+            max_cycles: None,
             ignore: Vec::new(),
-            known_cyclic_files: Vec::new(),
+            cyclic_files: Vec::new(),
             ignore_derived_ancestor_init: false,
             ignore_dirs: Vec::new(),
         }
@@ -179,18 +183,18 @@ impl Config {
             }
         }
 
-        for entry in &self.cycles.known_cyclic_files {
+        for entry in &self.cycles.cyclic_files {
             let trimmed = entry.trim();
             if trimmed.is_empty() {
                 return Err(ConfigError::Validation(
-                    "known-cyclic-files entry must not be empty".to_string(),
+                    "cyclic-files entry must not be empty".to_string(),
                 ));
             }
 
             let normalized = trimmed.replace('\\', "/");
             if normalized.starts_with('/') {
                 return Err(ConfigError::Validation(format!(
-                    "known-cyclic-files entry must be a relative path, got absolute: {entry}"
+                    "cyclic-files entry must be a relative path, got absolute: {entry}"
                 )));
             }
             if normalized
@@ -199,7 +203,7 @@ impl Config {
                 .is_some_and(|seg| seg.contains(':'))
             {
                 return Err(ConfigError::Validation(format!(
-                    "known-cyclic-files entry must be a relative path, got absolute: {entry}"
+                    "cyclic-files entry must be a relative path, got absolute: {entry}"
                 )));
             }
         }
@@ -409,6 +413,7 @@ include-ancestor-init = true
         assert!(config.resolve.include_ancestor_init);
         assert_eq!(config.cycles.min_scc_size, 2);
         assert_eq!(config.cycles.max_scc_size, None);
+        assert_eq!(config.cycles.max_cycles, None);
     }
 
     // --- cycles config tests ---
@@ -419,6 +424,19 @@ include-ancestor-init = true
         let config = Config::from_toml(toml_str).unwrap();
         assert_eq!(config.cycles.min_scc_size, 2);
         assert_eq!(config.cycles.max_scc_size, None);
+        assert_eq!(config.cycles.max_cycles, None);
+    }
+
+    #[test]
+    fn cycles_max_cycles() {
+        let toml_str = r#"
+source-roots = ["."]
+
+[cycles]
+max-cycles = 9
+"#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert_eq!(config.cycles.max_cycles, Some(9));
     }
 
     #[test]
@@ -552,46 +570,46 @@ files = []
     }
 
     #[test]
-    fn known_cyclic_files_parses() {
+    fn cyclic_files_parses() {
         let toml_str = r#"
 source-roots = ["."]
 
 [cycles]
-known-cyclic-files = ["pkg/a.py", "pkg/b.py"]
+cyclic-files = ["pkg/a.py", "pkg/b.py"]
 "#;
         let config = Config::from_toml(toml_str).unwrap();
         assert_eq!(
-            config.cycles.known_cyclic_files,
+            config.cycles.cyclic_files,
             vec!["pkg/a.py".to_string(), "pkg/b.py".to_string()]
         );
     }
 
     #[test]
-    fn known_cyclic_files_omitted_defaults_to_empty() {
+    fn cyclic_files_omitted_defaults_to_empty() {
         let toml_str = r#"source-roots = ["."]"#;
         let config = Config::from_toml(toml_str).unwrap();
-        assert!(config.cycles.known_cyclic_files.is_empty());
+        assert!(config.cycles.cyclic_files.is_empty());
     }
 
     #[test]
-    fn known_cyclic_files_empty_list_is_valid() {
+    fn cyclic_files_empty_list_is_valid() {
         let toml_str = r#"
 source-roots = ["."]
 
 [cycles]
-known-cyclic-files = []
+cyclic-files = []
 "#;
         let config = Config::from_toml(toml_str).unwrap();
-        assert!(config.cycles.known_cyclic_files.is_empty());
+        assert!(config.cycles.cyclic_files.is_empty());
     }
 
     #[test]
-    fn known_cyclic_files_empty_string_entry_is_error() {
+    fn cyclic_files_empty_string_entry_is_error() {
         let toml_str = r#"
 source-roots = ["."]
 
 [cycles]
-known-cyclic-files = [""]
+cyclic-files = [""]
 "#;
         let result = Config::from_toml(toml_str);
         assert!(result.is_err());
@@ -600,12 +618,12 @@ known-cyclic-files = [""]
     }
 
     #[test]
-    fn known_cyclic_files_absolute_path_is_error() {
+    fn cyclic_files_absolute_path_is_error() {
         let toml_str = r#"
 source-roots = ["."]
 
 [cycles]
-known-cyclic-files = ["/abs/x.py"]
+cyclic-files = ["/abs/x.py"]
 "#;
         let result = Config::from_toml(toml_str);
         assert!(result.is_err());
@@ -614,9 +632,9 @@ known-cyclic-files = ["/abs/x.py"]
     }
 
     #[test]
-    fn known_cyclic_files_default_is_empty() {
+    fn cyclic_files_default_is_empty() {
         let config = CyclesConfig::default();
-        assert!(config.known_cyclic_files.is_empty());
+        assert!(config.cyclic_files.is_empty());
     }
 
     #[test]

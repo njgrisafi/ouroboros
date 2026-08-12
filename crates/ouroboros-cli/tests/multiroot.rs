@@ -319,10 +319,10 @@ fn ignore_entry_makes_strict_pass() {
     );
 }
 
-// ── (h) known-cyclic-files with project-root-relative paths passes check ──────
+// ── (h) cyclic-files with project-root-relative paths passes check ──────
 
 #[test]
-fn known_cyclic_files_project_relative_passes_check() {
+fn cyclic_files_project_relative_passes_check() {
     let cfg = fixture_config("oboros-known.toml");
     let output = run_raw(&["--config", cfg.to_str().unwrap(), "--check-cyclic-files"]);
     let stderr = String::from_utf8(output.stderr).unwrap();
@@ -330,7 +330,7 @@ fn known_cyclic_files_project_relative_passes_check() {
     assert_eq!(
         output.status.code().unwrap(),
         0,
-        "check should pass when known-cyclic-files matches the computed set; stderr:\n{stderr}"
+        "check should pass when cyclic-files matches the computed set; stderr:\n{stderr}"
     );
     assert!(
         stderr.contains("unchanged"),

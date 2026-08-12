@@ -686,6 +686,8 @@ def generate(scale: int = 1, seed: int = 42) -> None:
         "\n"
         "[cycles]\n"
         "min-scc-size = 2\n"
+        "# Budget on the number of cycles allowed; enforced with --check-max-cycles.\n"
+        "max-cycles = 10\n"
     )
 
     # Collect stats.

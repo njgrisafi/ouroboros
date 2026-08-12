@@ -21,7 +21,7 @@ Designed for large monorepos with millions of lines of code.
 - JSON output (`--format json`) for programmatic consumption
 - Ignore list support (`[[cycles.ignore]]` in config) to suppress known cycles
 - `--dump-ignores` to bootstrap ignore lists from detected cycles
-- Track known cyclic files (`[cycles] known-cyclic-files`) to grandfather current cycles and block new ones; generate with `--dump-cyclic-files`, gate CI with `--check-cyclic-files`
+- Track known cyclic files (`[cycles] cyclic-files`) to grandfather current cycles and block new ones; generate with `--dump-cyclic-files`, gate CI with `--check-cyclic-files`
 - Write cyclic-files baseline and ignore entries directly into `oboros.toml` with `--write` (no copy-paste required)
 - `--strict` mode for CI enforcement (exit code 1 on cycles)
 - `--package` flag to filter to intra-package cycles only

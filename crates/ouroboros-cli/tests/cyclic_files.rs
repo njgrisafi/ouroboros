@@ -44,7 +44,7 @@ fn dump_human_prints_toml_fragment() {
     let output = run_raw(&["--config", cfg.to_str().unwrap(), "--dump-cyclic-files"]);
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("known-cyclic-files = ["),
+        stdout.contains("cyclic-files = ["),
         "should contain array header"
     );
     assert!(
@@ -162,7 +162,7 @@ fn dump_empty_when_no_cycles() {
     let output = run_raw(&["--config", cfg.to_str().unwrap(), "--dump-cyclic-files"]);
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("known-cyclic-files = []"),
+        stdout.contains("cyclic-files = []"),
         "human mode should print empty array"
     );
     assert_eq!(output.status.code().unwrap(), 0);

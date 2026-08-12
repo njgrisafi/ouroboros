@@ -1,4 +1,4 @@
 source-roots = ["src", "lib"]
 
 [cycles]
-known-cyclic-files = ["src/pkg/a.py", "src/pkg/b.py"]
+cyclic-files = ["src/pkg/a.py", "src/pkg/b.py"]

@@ -1,7 +1,7 @@
 source-roots = ["src"]
 
 [cycles]
-known-cyclic-files = ["src/app/a.py", "src/app/b.py"]
+cyclic-files = ["src/app/a.py", "src/app/b.py"]
 
 [[cycles.ignore]]
 files = ["src/app/a.py", "src/app/b.py"]
