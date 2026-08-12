@@ -109,23 +109,56 @@ pub fn resolve_file(
     resolve::resolve_file_imports(source_module, imports, index, options)
 }
 
+/// Per-file extraction outcome reported to the optional [`resolve_all`] sink.
+///
+/// Lets callers (e.g. the CLI's verbose mode) observe the per-file imports
+/// that `resolve_all` already computes, and surface read/parse warnings,
+/// without re-walking and re-parsing every file.
+pub enum ExtractEvent<'a> {
+    /// Imports were successfully extracted from a file.
+    Imports {
+        /// The file's module name.
+        module: &'a str,
+        /// The extracted raw imports.
+        imports: &'a [RawImport],
+    },
+    /// A file could not be read; it is skipped.
+    ReadError {
+        /// The absolute path that failed.
+        path: &'a std::path::Path,
+        /// The I/O error message.
+        message: String,
+    },
+    /// A file could not be parsed; it is skipped.
+    ParseError {
+        /// The file's module name.
+        module: &'a str,
+        /// The parse error message.
+        message: String,
+    },
+}
+
 /// Resolve all imports for every discovered file in the project.
 ///
 /// Reads each Python source file, extracts imports, and resolves them
 /// against the first-party module index. Returns aggregated, deduplicated
 /// results.
 ///
-/// Files that cannot be read or parsed are silently skipped (warnings are
-/// the CLI's responsibility).
+/// Files that cannot be read or parsed are silently skipped; pass `sink` to
+/// observe per-file extraction outcomes (warnings are the CLI's
+/// responsibility).
 pub fn resolve_all(
     discovery: &DiscoveryResult,
     index: &ModuleIndex,
     config: &Config,
     project_root: &std::path::Path,
+    mut sink: Option<&mut dyn FnMut(ExtractEvent<'_>)>,
 ) -> ResolveResult {
-    let extract_options = crate::parser::ExtractOptions {
-        include_local: config.parse.local_imports,
-        string_imports: config.parse.string_imports,
+    let extract_options = crate::parser::ExtractOptions::from(&config.parse);
+    // Hoisted out of the loop: only `source_is_package` varies per file.
+    let mut resolve_options = ResolveOptions {
+        include_ancestor_init: config.resolve.include_ancestor_init,
+        source_is_package: false,
         string_imports_mode: config.parse.string_imports_mode,
         string_imports_min_dots: config.parse.string_imports_min_dots,
     };
@@ -139,24 +172,41 @@ pub fn resolve_all(
 
             let source = match std::fs::read_to_string(&abs_path) {
                 Ok(s) => s,
-                Err(_) => continue,
+                Err(e) => {
+                    if let Some(sink) = sink.as_deref_mut() {
+                        sink(ExtractEvent::ReadError {
+                            path: &abs_path,
+                            message: e.to_string(),
+                        });
+                    }
+                    continue;
+                }
             };
 
             let imports = match crate::parser::extract_imports(&source, &extract_options) {
                 Ok(imports) => imports,
-                Err(_) => continue,
+                Err(e) => {
+                    if let Some(sink) = sink.as_deref_mut() {
+                        sink(ExtractEvent::ParseError {
+                            module: &file.module_name,
+                            message: e.to_string(),
+                        });
+                    }
+                    continue;
+                }
             };
 
-            let source_is_package = file
+            if let Some(sink) = sink.as_deref_mut() {
+                sink(ExtractEvent::Imports {
+                    module: &file.module_name,
+                    imports: &imports,
+                });
+            }
+
+            resolve_options.source_is_package = file
                 .rel_path
                 .file_name()
                 .is_some_and(|name| name == "__init__.py");
-            let resolve_options = ResolveOptions {
-                include_ancestor_init: config.resolve.include_ancestor_init,
-                source_is_package,
-                string_imports_mode: config.parse.string_imports_mode,
-                string_imports_min_dots: config.parse.string_imports_min_dots,
-            };
             let resolution = resolve_file(&file.module_name, &imports, index, &resolve_options);
             all_deps.extend(resolution.deps);
             all_unresolved.extend(resolution.unresolved);

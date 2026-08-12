@@ -166,7 +166,14 @@ impl Visitor for ImportCollector<'_> {
                 _ => {}
             }
         }
-        self.generic_visit_stmt(node);
+        // Recursing below this statement can only yield facts when local
+        // imports are included, or — at module level — when string scanning
+        // needs this statement's own expressions (decorators, defaults, RHS).
+        // Otherwise skip the subtree: nested statements are excluded by the
+        // depth gate and expressions have nothing to collect.
+        if self.options.include_local || (self.depth == 1 && self.options.string_imports) {
+            self.generic_visit_stmt(node);
+        }
         self.depth -= 1;
     }
 
