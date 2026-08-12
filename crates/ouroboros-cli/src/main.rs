@@ -322,10 +322,10 @@ fn main() {
         config.parse.string_imports = true;
     }
 
-    // Validate check-mode flags now that CLI overrides have been folded into
-    // `config`. The combo guard is config-independent and runs earlier (next
-    // to the --write guards); the no-cap guard reads the merged cap here.
-    checks::validate_check_flags(cli.check_max_cycles, cli.check_cyclic_files, &config);
+    // Validate the max-cycles budget now that CLI overrides have been folded
+    // into `config`. The combo guard is config-independent and runs earlier
+    // (next to the --write guards); this reads the merged budget.
+    checks::validate_max_cycles_cap(cli.check_max_cycles, &config);
 
     // Not gated on cyclic_surface_active: this flag affects the main cycle
     // report, not just the cyclic-files surface (unlike ignore-derived-ancestor-init).

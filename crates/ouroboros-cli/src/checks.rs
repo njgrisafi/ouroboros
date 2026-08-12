@@ -7,25 +7,23 @@
 //!
 //! Both are invoked from `main` after discovery, filtering, and the spinner
 //! have finished, and both short-circuit the normal report on success or
-//! failure. [`validate_check_flags`] is the pre-flight companion: it rejects
-//! meaningless flag combinations and missing inputs before the project scan.
+//! failure. [`validate_max_cycles_cap`] is the pre-flight companion that
+//! rejects a missing budget before the project scan. The combo guard
+//! (`--check-max-cycles` + `--check-cyclic-files`) is config-independent and
+//! lives in `main` next to the other flag-combo guards.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use ouroboros_core::config::Config;
 
-/// Pre-flight validation for the check-mode flags.
+/// Pre-flight validation: ensure `--check-max-cycles` has a budget.
 ///
-/// Runs before discovery so usage errors surface without a full project scan.
-/// The combo guard (`--check-max-cycles` + `--check-cyclic-files`) is
-/// config-independent; the no-cap guard runs after the CLI override has been
-/// folded into `config` (see `main`), so it reads the single source of truth.
-pub fn validate_check_flags(check_max_cycles: bool, check_cyclic_files: bool, config: &Config) {
-    if check_max_cycles && check_cyclic_files {
-        eprintln!("error: --check-max-cycles cannot be combined with --check-cyclic-files");
-        std::process::exit(2);
-    }
+/// Runs after the CLI override has been folded into `config` (see `main`),
+/// so it reads the single source of truth. The combo guard
+/// (`--check-max-cycles` + `--check-cyclic-files`) is config-independent and
+/// is handled earlier in `main`.
+pub fn validate_max_cycles_cap(check_max_cycles: bool, config: &Config) {
     if check_max_cycles && config.cycles.max_cycles.is_none() {
         eprintln!(
             "error: --check-max-cycles requires --max-cycles or [cycles] max-cycles in oboros.toml"
@@ -37,7 +35,7 @@ pub fn validate_check_flags(check_max_cycles: bool, check_cyclic_files: bool, co
 /// Enforce the `--check-max-cycles` budget.
 ///
 /// `cap` is the resolved budget (CLI flag overriding config); the caller
-/// establishes it is `Some` via [`validate_check_flags`] before unwrapping,
+/// establishes it is `Some` via [`validate_max_cycles_cap`] before unwrapping,
 /// so this helper takes a non-optional `usize` and the invariant lives at a
 /// single call site rather than spanning the pipeline.
 ///

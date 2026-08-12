@@ -132,3 +132,27 @@ fn cli_flag_overrides_config_cap() {
         "unexpected stderr: {stderr}"
     );
 }
+
+#[test]
+fn ignored_cycles_do_not_count_toward_budget() {
+    // cyclic_ignore has one cycle (a <-> b) suppressed by a [[cycles.ignore]]
+    // entry. The post-filter cycle count is 0, so a budget of 0 should pass.
+    let cfg = fixture_config("cyclic_ignore");
+    let output = run_raw(&[
+        "--config",
+        cfg.to_str().unwrap(),
+        "--check-max-cycles",
+        "--max-cycles",
+        "0",
+    ]);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(
+        output.status.code().unwrap(),
+        0,
+        "ignored cycles should not count toward the budget"
+    );
+    assert!(
+        stderr.contains("cycle count 0 within max-cycles 0"),
+        "unexpected stderr: {stderr}"
+    );
+}

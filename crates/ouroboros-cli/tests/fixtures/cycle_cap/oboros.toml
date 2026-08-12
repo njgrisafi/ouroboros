@@ -1,3 +1,5 @@
+# Exercises the [cycles] max-cycles config-key path; CLI override tests
+# reuse the cyclic_basic fixture instead.
 source-roots = ["src"]
 
 [cycles]
