@@ -1,5 +1,6 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
+
+use rustc_hash::FxHashMap;
 
 use crate::resolver::SuppressedAncestorEdge;
 
@@ -25,7 +26,7 @@ use super::{EdgeMetadata, FileDependencyGraph, strongly_connected_components};
 pub fn restore_self_ancestor_init_edges(
     graph: &mut FileDependencyGraph,
     edge_metadata: &mut EdgeMetadata,
-    module_to_path: &HashMap<String, PathBuf>,
+    module_to_path: &FxHashMap<String, PathBuf>,
     suppressed: &[SuppressedAncestorEdge],
 ) {
     // 1. Map to path pairs; skip edges whose endpoints aren't graph nodes,
@@ -58,7 +59,7 @@ pub fn restore_self_ancestor_init_edges(
 
     // 3. One SCC pass; build node -> scc-id map.
     let sccs = strongly_connected_components(&augmented);
-    let mut node_to_scc: HashMap<&PathBuf, usize> = HashMap::new();
+    let mut node_to_scc: FxHashMap<&PathBuf, usize> = FxHashMap::default();
     for (id, scc) in sccs.iter().enumerate() {
         for node in scc {
             node_to_scc.insert(node, id);
@@ -85,7 +86,7 @@ mod tests {
 
     /// Build a `FileDependencyGraph` from `(node, &[dep])` pairs.
     fn make_graph(edges: &[(&str, &[&str])]) -> FileDependencyGraph {
-        let mut graph = FileDependencyGraph::new();
+        let mut graph = FileDependencyGraph::default();
         for (node, deps) in edges {
             let dep_set: BTreeSet<PathBuf> = deps.iter().map(PathBuf::from).collect();
             graph.insert(PathBuf::from(node), dep_set);
@@ -94,7 +95,7 @@ mod tests {
     }
 
     /// Build a `module_to_path` map from `(module, path)` pairs.
-    fn make_module_to_path(pairs: &[(&str, &str)]) -> HashMap<String, PathBuf> {
+    fn make_module_to_path(pairs: &[(&str, &str)]) -> FxHashMap<String, PathBuf> {
         pairs
             .iter()
             .map(|(module, path)| (module.to_string(), PathBuf::from(path)))
@@ -122,7 +123,7 @@ mod tests {
             ("pkg/child.py", &[]),
         ]);
         let mut edge_metadata = EdgeMetadata {
-            lines: HashMap::new(),
+            lines: FxHashMap::default(),
         };
         let module_to_path =
             make_module_to_path(&[("pkg", "pkg/__init__.py"), ("pkg.child", "pkg/child.py")]);
@@ -156,7 +157,7 @@ mod tests {
         // pkg/__init__.py is NOT in the graph — no path from it to child.
         let mut graph = make_graph(&[("pkg/child.py", &["pkg/other.py"]), ("pkg/other.py", &[])]);
         let mut edge_metadata = EdgeMetadata {
-            lines: HashMap::new(),
+            lines: FxHashMap::default(),
         };
         let module_to_path =
             make_module_to_path(&[("pkg", "pkg/__init__.py"), ("pkg.child", "pkg/child.py")]);
@@ -185,7 +186,7 @@ mod tests {
             ("b.py", &[]),
         ]);
         let mut edge_metadata = EdgeMetadata {
-            lines: HashMap::new(),
+            lines: FxHashMap::default(),
         };
         let module_to_path =
             make_module_to_path(&[("pkg", "parent/__init__.py"), ("pkg.b", "b.py")]);
@@ -217,7 +218,7 @@ mod tests {
             ("b/__init__.py", &["a/x.py"]),
         ]);
         let mut edge_metadata = EdgeMetadata {
-            lines: HashMap::new(),
+            lines: FxHashMap::default(),
         };
         let module_to_path = make_module_to_path(&[
             ("a", "a/__init__.py"),
@@ -254,7 +255,7 @@ mod tests {
             ("b/__init__.py", &["a/x.py"]),
         ]);
         let mut edge_metadata = EdgeMetadata {
-            lines: HashMap::new(),
+            lines: FxHashMap::default(),
         };
         let module_to_path = make_module_to_path(&[
             ("a", "a/__init__.py"),
@@ -285,7 +286,7 @@ mod tests {
         let mut graph = make_graph(&[("a.py", &["b.py"]), ("b.py", &["a.py"])]);
         let original = graph.clone();
         let mut edge_metadata = EdgeMetadata {
-            lines: HashMap::new(),
+            lines: FxHashMap::default(),
         };
         let module_to_path = make_module_to_path(&[("a", "a.py"), ("b", "b.py")]);
         let suppressed: Vec<SuppressedAncestorEdge> = Vec::new();
@@ -317,7 +318,7 @@ mod tests {
         ]);
         let original = graph.clone();
         let mut edge_metadata = EdgeMetadata {
-            lines: HashMap::new(),
+            lines: FxHashMap::default(),
         };
         // "pkg.unknown" is intentionally absent from module_to_path.
         let module_to_path = make_module_to_path(&[("pkg", "pkg/__init__.py")]);
@@ -343,7 +344,7 @@ mod tests {
     fn self_candidate_is_not_restored() {
         let mut graph = make_graph(&[("pkg/__init__.py", &[])]);
         let mut edge_metadata = EdgeMetadata {
-            lines: HashMap::new(),
+            lines: FxHashMap::default(),
         };
         // Both source and ancestor resolve to the same path.
         let module_to_path = make_module_to_path(&[("pkg", "pkg/__init__.py")]);

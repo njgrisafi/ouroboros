@@ -415,13 +415,13 @@ fn main() {
         }
     };
     let index = resolver::ModuleIndex::from_discovery(&discovery_result);
-    let resolve_result = resolver::resolve_all(
+    let parsed = resolver::parse_all(
         &discovery_result,
-        &index,
-        &config,
+        &parser::ExtractOptions::from(&config.parse),
         &project_root,
         Some(&mut extract_sink),
     );
+    let resolve_result = resolver::resolve_parsed(&parsed, &index, &config);
 
     if verbose {
         println!(
@@ -449,14 +449,13 @@ fn main() {
         // (project-root-relative) — the graph is keyed on rel_path (build.rs:57,64).
         // Iterate roots/files in the same order as build_file_dependency_graph
         // (build.rs:26-43) so module-name collision resolution is consistent.
-        let module_to_path: std::collections::HashMap<String, std::path::PathBuf> =
-            discovery_result
-                .roots
-                .iter()
-                .flat_map(|r| r.files.iter())
-                .filter(|f| !f.module_name.is_empty())
-                .map(|f| (f.module_name.clone(), f.rel_path.clone()))
-                .collect();
+        let module_to_path: rustc_hash::FxHashMap<String, std::path::PathBuf> = discovery_result
+            .roots
+            .iter()
+            .flat_map(|r| r.files.iter())
+            .filter(|f| !f.module_name.is_empty())
+            .map(|f| (f.module_name.clone(), f.rel_path.clone()))
+            .collect();
         graph::restore_self_ancestor_init_edges(
             &mut graph_result.graph,
             &mut graph_result.edge_metadata,
@@ -509,13 +508,18 @@ fn main() {
         }
     }
     let effective_graph = if excluded.is_empty() {
-        graph_result.graph.clone()
+        // No exclusions: move the graph instead of deep-cloning every node
+        // and edge. Only `graph_result.edge_metadata` is used after this.
+        graph_result.graph
     } else {
         graph::apply_exclusions(&graph_result.graph, &excluded)
     };
 
     spinner.set_message("Detecting cycles...");
-    let all_cycles = graph::dependency_cycles(&effective_graph);
+    // Compute SCCs once: cycle detection filters them, and trace analysis
+    // (build_traces) maps nodes onto the same list.
+    let all_sccs = graph::strongly_connected_components(&effective_graph);
+    let all_cycles = graph::cycles_from_sccs(&effective_graph, &all_sccs);
     let size_filtered = cycles::filter_cycles_by_size(all_cycles, &config.cycles);
     // Rebind `size_filtered` to the kept partition so every downstream consumer
     // (report, --strict, cyclic-files baseline) sees only non-dir-ignored cycles.
@@ -541,16 +545,11 @@ fn main() {
         && cyclic_surface_active
     {
         // Direct-only pass: resolve without ancestor-init edges to compute the baseline.
-        // Reuses the same index (edge-independent) and excluded set (path-keyed).
+        // Reuses the parsed imports (no re-read/re-parse), the same index
+        // (edge-independent), and the excluded set (path-keyed).
         let mut direct_config = config.clone();
         direct_config.resolve.include_ancestor_init = false;
-        let direct_resolve = resolver::resolve_all(
-            &discovery_result,
-            &index,
-            &direct_config,
-            &project_root,
-            None,
-        );
+        let direct_resolve = resolver::resolve_parsed(&parsed, &index, &direct_config);
         let direct_graph = graph::build_file_dependency_graph(&discovery_result, &direct_resolve);
         let direct_effective = if excluded.is_empty() {
             direct_graph.graph
@@ -862,6 +861,7 @@ fn main() {
                 Some(output::build_traces(
                     &cli.traces,
                     &cycles,
+                    &all_sccs,
                     &effective_graph,
                     &graph_result.edge_metadata,
                     &config.source_roots,
@@ -934,6 +934,7 @@ fn main() {
                 output::build_traces(
                     &cli.traces,
                     &cycles,
+                    &all_sccs,
                     &effective_graph,
                     &graph_result.edge_metadata,
                     &config.source_roots,

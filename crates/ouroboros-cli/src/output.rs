@@ -1,11 +1,12 @@
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use ouroboros_core::graph::{
-    EdgeMetadata, FileDependencyGraph, PathKind, PathMatch, condensation, match_path,
-    nodes_reaching_cycles, reachable_cycles_from_pruned, strip_source_root_prefix,
-    strongly_connected_components,
+    EdgeMetadata, FileDependencyGraph, InternedGraph, PathKind, PathMatch, cycle_scc_flags,
+    interned_node_to_scc, interned_nodes_reaching_cycles, interned_reachable_cycles, match_path,
+    scc_of_path, strip_source_root_prefix,
 };
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
@@ -254,23 +255,29 @@ pub fn build_json_report(
     }
 }
 
+/// Build per-trace impact results. `sccs` must be the strongly connected
+/// components of `graph` (computed once by the caller and shared with cycle
+/// detection, so Tarjan's algorithm does not run twice per invocation).
 pub fn build_traces(
     raw_traces: &[String],
     kept_cycles: &[Vec<PathBuf>],
+    sccs: &[Vec<PathBuf>],
     graph: &FileDependencyGraph,
     edge_metadata: &EdgeMetadata,
     source_roots: &[String],
 ) -> (Vec<JsonTrace>, Vec<String>) {
     let node_paths: BTreeSet<PathBuf> = graph.keys().cloned().collect();
-    let sccs = strongly_connected_components(graph);
-    let cond = condensation(graph, &sccs);
+
+    // Intern the graph once: every per-node impact BFS below then runs on
+    // Vec-indexed u32 ids instead of hashing and cloning PathBufs.
+    let igraph = InternedGraph::new(graph);
+    let node_to_scc = interned_node_to_scc(&igraph, sccs);
 
     let ordered = order_cycles(kept_cycles, source_roots);
     let cycle_sccs: HashSet<usize> = kept_cycles
         .iter()
         .filter_map(|cycle| cycle.first())
-        .filter_map(|first| cond.node_to_scc.get(first))
-        .copied()
+        .filter_map(|first| scc_of_path(&igraph, &node_to_scc, first))
         .collect();
 
     let cycle_index_map: HashMap<usize, usize> = ordered
@@ -279,11 +286,13 @@ pub fn build_traces(
         .filter_map(|(i, (_, cycle))| {
             cycle
                 .first()
-                .and_then(|first| cond.node_to_scc.get(first))
-                .map(|&scc_id| (scc_id, i + 1))
+                .and_then(|first| scc_of_path(&igraph, &node_to_scc, first))
+                .map(|scc_id| (scc_id, i + 1))
         })
         .collect();
-    let cycle_reachable_nodes = nodes_reaching_cycles(graph, &cond.node_to_scc, &cycle_sccs);
+
+    let cycle_flags = cycle_scc_flags(&cycle_sccs, sccs.len());
+    let cycle_reachable_nodes = interned_nodes_reaching_cycles(&igraph, &node_to_scc, &cycle_flags);
 
     let mut traced_results = Vec::new();
     let mut unknown_paths = Vec::new();
@@ -308,17 +317,25 @@ pub fn build_traces(
             PathKind::Directory => ("directory".to_string(), format!("{resolved}/")),
         };
 
+        // Each node's impact query is an independent BFS over read-only
+        // shared state; run them in parallel. `par_iter` collect preserves
+        // node order, so output stays deterministic.
         let files = matched
             .nodes
-            .iter()
+            .par_iter()
             .map(|node| {
-                let reachable = reachable_cycles_from_pruned(
-                    graph,
-                    node,
-                    &cond.node_to_scc,
-                    &cycle_sccs,
-                    &cycle_reachable_nodes,
-                );
+                let reachable = igraph
+                    .id(node)
+                    .map(|start_id| {
+                        interned_reachable_cycles(
+                            &igraph,
+                            start_id,
+                            &node_to_scc,
+                            &cycle_flags,
+                            Some(&cycle_reachable_nodes),
+                        )
+                    })
+                    .unwrap_or_default();
                 let impacts = reachable
                     .iter()
                     .filter_map(|rc| {
@@ -465,12 +482,12 @@ pub fn build_dump_ignores_report(cycles: &[Vec<PathBuf>]) -> JsonDumpIgnoresRepo
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ouroboros_core::graph::EdgeMetadata;
-    use std::collections::{BTreeSet, HashMap};
+    use ouroboros_core::graph::{EdgeMetadata, strongly_connected_components};
+    use std::collections::BTreeSet;
     use std::path::PathBuf;
 
     fn make_edge_metadata(edges: &[(&str, &str, Vec<u32>)]) -> EdgeMetadata {
-        let mut lines = HashMap::new();
+        let mut lines = rustc_hash::FxHashMap::default();
         for (from, to, line_nums) in edges {
             lines.insert((PathBuf::from(from), PathBuf::from(to)), line_nums.clone());
         }
@@ -875,7 +892,7 @@ mod tests {
     #[test]
     fn build_traces_member_has_no_path_or_from_lines() {
         let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
-        let mut graph = FileDependencyGraph::new();
+        let mut graph = FileDependencyGraph::default();
         graph.insert(
             PathBuf::from("a.py"),
             BTreeSet::from([PathBuf::from("b.py")]),
@@ -887,8 +904,15 @@ mod tests {
         let edge_metadata =
             make_edge_metadata(&[("a.py", "b.py", vec![1]), ("b.py", "a.py", vec![2])]);
 
-        let (traced, unknown) =
-            build_traces(&["a.py".to_string()], &kept, &graph, &edge_metadata, &[]);
+        let sccs = strongly_connected_components(&graph);
+        let (traced, unknown) = build_traces(
+            &["a.py".to_string()],
+            &kept,
+            &sccs,
+            &graph,
+            &edge_metadata,
+            &[],
+        );
 
         assert!(unknown.is_empty());
         assert_eq!(traced.len(), 1);
@@ -902,7 +926,7 @@ mod tests {
     #[test]
     fn build_traces_clean_file_has_no_impacts() {
         let kept = vec![vec![PathBuf::from("a.py"), PathBuf::from("b.py")]];
-        let mut graph = FileDependencyGraph::new();
+        let mut graph = FileDependencyGraph::default();
         graph.insert(
             PathBuf::from("a.py"),
             BTreeSet::from([PathBuf::from("b.py")]),
@@ -914,9 +938,11 @@ mod tests {
         graph.insert(PathBuf::from("clean.py"), BTreeSet::new());
         let edge_metadata = make_edge_metadata(&[]);
 
+        let sccs = strongly_connected_components(&graph);
         let (traced, _) = build_traces(
             &["clean.py".to_string()],
             &kept,
+            &sccs,
             &graph,
             &edge_metadata,
             &[],
@@ -928,11 +954,18 @@ mod tests {
     #[test]
     fn build_traces_unknown_path_recorded() {
         let kept: Vec<Vec<PathBuf>> = vec![];
-        let graph = FileDependencyGraph::new();
+        let graph = FileDependencyGraph::default();
         let edge_metadata = make_edge_metadata(&[]);
 
-        let (traced, unknown) =
-            build_traces(&["nope.py".to_string()], &kept, &graph, &edge_metadata, &[]);
+        let sccs = strongly_connected_components(&graph);
+        let (traced, unknown) = build_traces(
+            &["nope.py".to_string()],
+            &kept,
+            &sccs,
+            &graph,
+            &edge_metadata,
+            &[],
+        );
 
         assert!(traced.is_empty());
         assert_eq!(unknown, vec!["nope.py".to_string()]);
@@ -942,10 +975,11 @@ mod tests {
     fn build_traces_traced_and_unknown_paths_omitted_when_empty() {
         let kept: Vec<Vec<PathBuf>> = vec![];
         let edge_metadata = make_edge_metadata(&[]);
-        let mut graph = FileDependencyGraph::new();
+        let mut graph = FileDependencyGraph::default();
         graph.insert(PathBuf::from("a.py"), BTreeSet::new());
 
-        let (traced, unknown) = build_traces(&[], &kept, &graph, &edge_metadata, &[]);
+        let sccs = strongly_connected_components(&graph);
+        let (traced, unknown) = build_traces(&[], &kept, &sccs, &graph, &edge_metadata, &[]);
 
         assert!(traced.is_empty());
         assert!(unknown.is_empty());
