@@ -95,7 +95,7 @@ fn direct_init_still_listed_with_flag() {
 
 #[test]
 fn check_passes_when_ancestor_only_ignored() {
-    // With the flag and no known-cyclic-files, the direct-only baseline is empty == empty known list.
+    // With the flag and no cyclic-files, the direct-only baseline is empty == empty known list.
     let cfg = fixture_config("cyclic_ancestor_only");
     let output = run_raw(&[
         "--config",
@@ -281,7 +281,7 @@ fn dump_human_includes_ignore_flag_when_on() {
         "human fragment should carry the flag; got:\n{stdout}"
     );
     assert!(
-        stdout.contains("known-cyclic-files = ["),
+        stdout.contains("cyclic-files = ["),
         "should still list the direct cycle"
     );
     assert_eq!(output.status.code().unwrap(), 0);

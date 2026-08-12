@@ -65,8 +65,8 @@ fn write_cyclic_files_patches_config() {
 
     let contents = fs::read_to_string(&cfg).expect("read patched config");
     assert!(
-        contents.contains("known-cyclic-files"),
-        "config should contain known-cyclic-files after write:\n{contents}"
+        contents.contains("cyclic-files"),
+        "config should contain cyclic-files after write:\n{contents}"
     );
     assert!(
         contents.contains("\"src/app/a.py\""),

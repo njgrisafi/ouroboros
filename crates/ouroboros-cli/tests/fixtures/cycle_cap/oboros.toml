@@ -1,4 +1,4 @@
 source-roots = ["src"]
 
 [cycles]
-cyclic-files = ["src/app/a.py"]
+max-cycles = 1

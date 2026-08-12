@@ -5,7 +5,7 @@
 The binary is called `oboros`. Usage:
 
 ```
-oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--include-self-ancestor-init] [--local-imports] [--include-string-imports] [--strict] [--no-include-ancestor-init] [--exclude <PATH>] [--write]
+oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--dump-ignores] [--dump-cyclic-files] [--check-cyclic-files] [--check-max-cycles] [--max-cycles <N>] [--show-cyclic-files] [--ignore-derived-ancestor-init] [--include-self-ancestor-init] [--local-imports] [--include-string-imports] [--strict] [--no-include-ancestor-init] [--exclude <PATH>] [--write]
 ```
 
 | Flag | Description |
@@ -15,9 +15,11 @@ oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--d
 | `--package` | Only report cycles where all files belong to the same top-level package. Cross-package cycles are excluded. See [Intra-package filtering](#intra-package-filtering---package). |
 | `--dump-ignores` | Print ignore entries for all detected cycles, then exit. With `--format human` (default), prints TOML fragments. With `--format json`, prints a JSON object. Use with `--write` to patch `oboros.toml` directly. |
 | `--dump-cyclic-files` | Print the sorted set of files participating in any cycle as a pasteable TOML fragment (human) or JSON object (`--format json`), then exit. Use with `--write` to patch `oboros.toml` directly. |
-| `--check-cyclic-files` | Compare `[cycles] known-cyclic-files` in config against the freshly-computed set; exit 0 if identical, exit 1 if any difference (with a human diff on stderr). Independent of `--format`. Short-circuits the normal report. |
+| `--check-cyclic-files` | Compare `[cycles] cyclic-files` in config against the freshly-computed set; exit 0 if identical, exit 1 if any difference (with a human diff on stderr). Independent of `--format`. Short-circuits the normal report. |
+| `--check-max-cycles` | Fail (exit 1) if the number of detected cycles exceeds a budget. The budget comes from `--max-cycles` or `[cycles] max-cycles`. Exit 2 if no budget is set or if combined with `--check-cyclic-files`. Short-circuits the normal report. |
+| `--max-cycles <N>` | Budget on the number of cycles allowed (e.g. `9` = allow up to 9 cycles, fail on the 10th). Overrides `[cycles] max-cycles` in config. Only meaningful with `--check-max-cycles`. |
 | `--show-cyclic-files` | Include the cyclic-files set as an optional top-level `cyclic_files` array in the JSON report. No-op in human mode. |
-| `--ignore-derived-ancestor-init` | Exclude files that are cyclic only via a derived ancestor-`__init__.py` edge from the known-cyclic-files baseline. Overrides `[cycles] ignore-derived-ancestor-init` in config. Baseline-only; does not affect the normal cycle report. |
+| `--ignore-derived-ancestor-init` | Exclude files that are cyclic only via a derived ancestor-`__init__.py` edge from the cyclic-files baseline. Overrides `[cycles] ignore-derived-ancestor-init` in config. Baseline-only; does not affect the normal cycle report. |
 | `--include-self-ancestor-init` | Detect cycles that close through an eager parent `__init__.py`. Overrides `[resolve] include-self-ancestor-init` in config. See [`[resolve]` section](#resolve-section). |
 | `--local-imports` | Include imports nested inside functions, methods, classes, and control-flow blocks (deferred/"local" imports), not just top-level ones. Overrides `[parse] local-imports` in config. See [`[parse]` section](#parse-section). |
 | `--include-string-imports` | Also treat string literals that look like module paths as imports (ruff-style "string imports", e.g. `importlib.import_module("a.b.c")`). Respects `--local-imports` for whether strings nested inside functions/classes are scanned. Overrides `[parse] string-imports` in config. See [`[parse]` section](#parse-section). |
@@ -170,7 +172,7 @@ include-self-ancestor-init = true
 
 **Interaction with `include-ancestor-init`:** This option has no effect when `include-ancestor-init` is disabled. A warning is emitted if both are misconfigured.
 
-**Interaction with `ignore-derived-ancestor-init`:** Newly surfaced cycles are ancestor-init-derived and can be grandfathered via `ignore-derived-ancestor-init` or suppressed via `[[cycles.ignore]]` / `known-cyclic-files`.
+**Interaction with `ignore-derived-ancestor-init`:** Newly surfaced cycles are ancestor-init-derived and can be grandfathered via `ignore-derived-ancestor-init` or suppressed via `[[cycles.ignore]]` / `cyclic-files`.
 
 **`min-scc-size` caveat:** Surfaced cycles are subject to `[cycles] min-scc-size` (default 2). Newly-surfaced self-tree init cycles are typically 2 files, so `min-scc-size ≥ 3` will hide them. If the flag appears to have no effect, check this setting.
 
@@ -182,6 +184,7 @@ Controls which strongly connected components (SCCs) are reported.
 |-----|------|---------|-------------|
 | `min-scc-size` | `integer` | `2` | Minimum number of files in an SCC for it to be reported. Must be at least 1. |
 | `max-scc-size` | `integer` | _(none)_ | Maximum SCC size to report. If omitted, no upper bound is applied. Must be >= `min-scc-size`. |
+| `max-cycles` | `integer` | _(none)_ | Budget on the number of cycles allowed (e.g. `9` = allow up to 9, fail on the 10th). Only enforced with `--check-max-cycles`; overridden by `--max-cycles`. |
 
 A value of `min-scc-size = 1` will also report self-cycles (a file that imports itself). The default of `2` skips self-cycles and only reports groups of two or more files that form a cycle.
 
@@ -192,6 +195,35 @@ Use `max-scc-size` to focus on small, actionable cycles and exclude massive tang
 min-scc-size = 2
 max-scc-size = 5
 ```
+
+#### Capping the number of cycles (`max-cycles` + `--check-max-cycles`)
+
+`max-cycles` is a budget on the **number** of cycles (not their size). It is only enforced when `--check-max-cycles` is passed, which makes it a CI ratchet: record how many cycles you have today, and fail the build if a new one appears.
+
+```toml
+[cycles]
+max-cycles = 9
+```
+
+```bash
+# Fails (exit 1) if more than 9 cycles are detected
+oboros --check-max-cycles
+
+# Override the configured budget ad hoc
+oboros --check-max-cycles --max-cycles 9
+```
+
+The count is taken from the final filtered cycle list (after `min-scc-size`/`max-scc-size`, `[[cycles.ignore]]`, `ignore-dirs`, and `--package`) — exactly the cycles a normal report would show. Running `--check-max-cycles` with no budget set in either place is a usage error (exit 2), as is combining it with `--check-cyclic-files`. Because the check short-circuits the normal report, `--strict` has no effect alongside `--check-max-cycles`.
+
+**How this differs from the other cycle-gating flags:**
+
+| Flag | What it checks | Tolerates churn in existing cycles? |
+|------|---------------|--------------------------------------|
+| `--strict` | any cycle present (budget of 0) | no |
+| `--check-max-cycles` | cycle **count** exceeds budget | **yes** — files can enter/leave the cyclic set |
+| `--check-cyclic-files` | the exact **set** of cyclic files changes | no |
+
+Use `--check-max-cycles` when you are actively refactoring existing cycles and want to prevent new ones without freezing the file set. Use `--check-cyclic-files` when you want to freeze the set entirely. Use `--strict` when you have zero cycles and want to keep it that way.
 
 #### `[[cycles.ignore]]` entries
 
@@ -289,13 +321,13 @@ ignore-dirs = ["app/protos/", "app/migrations/"]
 
 **Validation:** entries must be relative (absolute paths and empty strings are rejected), consistent with `exclude`.
 
-#### `[cycles] known-cyclic-files`
+#### `[cycles] cyclic-files`
 
 A sorted list of first-party files known to participate in an import cycle. Used with `--check-cyclic-files` to grandfather currently-cyclic files and block new ones from being introduced.
 
 ```toml
 [cycles]
-known-cyclic-files = [
+cyclic-files = [
     "pkg/a.py",
     "pkg/b.py",
 ]
@@ -319,10 +351,10 @@ oboros --dump-cyclic-files --write
 
 # Or print a pasteable TOML fragment (human mode)
 oboros --dump-cyclic-files
-# Paste the output into [cycles] known-cyclic-files in oboros.toml
+# Paste the output into [cycles] cyclic-files in oboros.toml
 ```
 
-The human output includes a comment and the `[cycles]` header. If you already have a `[cycles]` table and prefer not to use `--write`, paste only the `known-cyclic-files = [...]` array into it — a blind `>> oboros.toml` redirect is only safe when no prior `[cycles]` table exists.
+The human output includes a comment and the `[cycles]` header. If you already have a `[cycles]` table and prefer not to use `--write`, paste only the `cyclic-files = [...]` array into it — a blind `>> oboros.toml` redirect is only safe when no prior `[cycles]` table exists.
 
 #### Checking for changes (`--check-cyclic-files`)
 
@@ -330,7 +362,7 @@ The human output includes a comment and the `[cycles]` header. If you already ha
 oboros --check-cyclic-files
 ```
 
-Compares the configured `known-cyclic-files` list against the freshly-computed set:
+Compares the configured `cyclic-files` list against the freshly-computed set:
 - **Exit 0** — sets are identical; prints `cyclic files unchanged (N files)` to stderr.
 - **Exit 1** — sets differ; prints a diff to stderr and a hint to re-run `--dump-cyclic-files`.
 
@@ -339,12 +371,12 @@ The diff format:
 cyclic files changed:
   + pkg/new.py        (newly cyclic)
   - pkg/old.py        (no longer cyclic)
-run `oboros --dump-cyclic-files --write` to update [cycles] known-cyclic-files in oboros.toml
+run `oboros --dump-cyclic-files --write` to update [cycles] cyclic-files in oboros.toml
 ```
 
 **Semantics:**
-- An empty `known-cyclic-files` list is **not** a no-op — any detected cyclic file is treated as a regression (exit 1).
-- `--check-cyclic-files` does **not** fail on grandfathered cycles still listed in `known-cyclic-files`; it fails only when the live set diverges from the recorded list. It is **not** a replacement for `--strict`.
+- An empty `cyclic-files` list is **not** a no-op — any detected cyclic file is treated as a regression (exit 1).
+- `--check-cyclic-files` does **not** fail on grandfathered cycles still listed in `cyclic-files`; it fails only when the live set diverges from the recorded list. It is **not** a replacement for `--strict`.
 - Behavior is independent of `--format` (always human stderr + exit code; no JSON output).
 
 **Known limitation:** paths are compared as display strings; on a case-insensitive filesystem (e.g. default macOS), entries differing only in case are treated as distinct — always use `--dump-cyclic-files` output verbatim to avoid case drift.
@@ -359,7 +391,7 @@ Adds an optional top-level `cyclic_files` array to the JSON report. Omitted when
 
 #### `[cycles] ignore-derived-ancestor-init`
 
-When `true`, files that become cyclic **only** because of a derived ancestor-`__init__.py` edge are excluded from the known-cyclic-files baseline. Default: `false` (existing behavior).
+When `true`, files that become cyclic **only** because of a derived ancestor-`__init__.py` edge are excluded from the cyclic-files baseline. Default: `false` (existing behavior).
 
 ```toml
 [cycles]
@@ -374,13 +406,13 @@ ignore-derived-ancestor-init = true
 
 **CLI:** `--ignore-derived-ancestor-init` forces the option on; there is no inverse flag (set `false` via config, which is the default).
 
-**Regenerate workflow:** enabling this option changes the computed baseline. A `known-cyclic-files` list generated without it will be flagged as stale by `--check-cyclic-files` (the now-ancestor-only files show as `- removed`). After enabling, re-run:
+**Regenerate workflow:** enabling this option changes the computed baseline. A `cyclic-files` list generated without it will be flagged as stale by `--check-cyclic-files` (the now-ancestor-only files show as `- removed`). After enabling, re-run:
 
 ```bash
 oboros --dump-cyclic-files --ignore-derived-ancestor-init
 ```
 
-and update `[cycles] known-cyclic-files`.
+and update `[cycles] cyclic-files`.
 
 #### Action-flag precedence
 
@@ -804,7 +836,7 @@ Version 0.6.0 changes all file paths from **source-root-relative** to **project-
 **What you need to update:**
 
 - **`[[cycles.ignore]]` entries:** Update `files` lists to use project-root-relative paths. For example, change `files = ["pkg/a.py", "pkg/b.py"]` to `files = ["src/pkg/a.py", "src/pkg/b.py"]`. Oboros will warn if it detects pre-0.6.0 paths.
-- **`[cycles] known-cyclic-files`:** Regenerate with `oboros --dump-cyclic-files` and update the list in your config.
+- **`[cycles] cyclic-files`:** Regenerate with `oboros --dump-cyclic-files` and update the list in your config.
 - **`--trace` and `--exclude` CLI arguments:** Use project-root-relative paths. For example, `--trace src/app/entry.py` instead of `--trace app/entry.py`.
 - **`oboros report --source-root`:** This flag is now `oboros report --root`. The old flag still works with a deprecation warning.
 - **JSON consumers:** The schema `version` field is now `2`. All paths in `cycles[].files[].path`, `cycles[].files[].edges[].to`, `traced[].path`, `traced[].files[].path`, `traced[].files[].impacts[].entry`, `traced[].files[].impacts[].path[].from`, `traced[].files[].impacts[].path[].to`, `excluded[]`, and `cyclic_files[]` are now project-root-relative.
@@ -865,7 +897,7 @@ oboros --trace src/app/ --format json | jq '.traced[0].files[] | select(.impacts
 ```bash
 # Step 1: generate the baseline (first time or after intentional changes)
 oboros --dump-cyclic-files
-# Paste the output into [cycles] known-cyclic-files in oboros.toml
+# Paste the output into [cycles] cyclic-files in oboros.toml
 
 # Step 2: CI gate — fails if any new file becomes cyclic or a listed file is no longer cyclic
 oboros --check-cyclic-files

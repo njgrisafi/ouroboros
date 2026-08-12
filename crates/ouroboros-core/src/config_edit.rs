@@ -86,7 +86,7 @@ fn cycles_table_mut(doc: &mut DocumentMut) -> Option<&mut Table> {
     doc.get_mut("cycles").and_then(Item::as_table_mut)
 }
 
-/// Replace the `known-cyclic-files` array under `[cycles]`, creating the
+/// Replace the `cyclic-files` array under `[cycles]`, creating the
 /// `[cycles]` table if it is missing.
 ///
 /// Paths are normalized (backslashes to forward slashes) and sorted, then
@@ -94,7 +94,7 @@ fn cycles_table_mut(doc: &mut DocumentMut) -> Option<&mut Table> {
 /// comma:
 ///
 /// ```toml
-/// known-cyclic-files = [
+/// cyclic-files = [
 ///     "src/app/a.py",
 ///     "src/app/b.py",
 /// ]
@@ -102,7 +102,7 @@ fn cycles_table_mut(doc: &mut DocumentMut) -> Option<&mut Table> {
 ///
 /// An empty `paths` slice writes an inline empty array (`[]`). All other keys
 /// and comments in the document are preserved.
-pub fn set_known_cyclic_files(doc: &mut DocumentMut, paths: &[String]) {
+pub fn set_cyclic_files(doc: &mut DocumentMut, paths: &[String]) {
     let mut normalized: Vec<String> = paths.iter().map(|p| normalize_path(p)).collect();
     normalized.sort();
 
@@ -124,7 +124,7 @@ pub fn set_known_cyclic_files(doc: &mut DocumentMut, paths: &[String]) {
     let Some(cycles) = cycles_table_mut(doc) else {
         return;
     };
-    cycles["known-cyclic-files"] = value(arr);
+    cycles["cyclic-files"] = value(arr);
 }
 
 /// Collect the set of file-list keys for the existing `[[cycles.ignore]]`
@@ -263,25 +263,25 @@ mod tests {
         items.iter().map(|s| s.to_string()).collect()
     }
 
-    // --- set_known_cyclic_files ---
+    // --- set_cyclic_files ---
 
     #[test]
-    fn set_known_cyclic_files_creates_cycles_table_if_missing() {
+    fn set_cyclic_files_creates_cycles_table_if_missing() {
         let mut doc = parse("source-roots = [\"src\"]\n");
-        set_known_cyclic_files(&mut doc, &strings(&["pkg/a.py", "pkg/b.py"]));
+        set_cyclic_files(&mut doc, &strings(&["pkg/a.py", "pkg/b.py"]));
         let out = doc.to_string();
         assert!(out.contains("[cycles]"), "missing [cycles] header: {out}");
-        assert!(out.contains("known-cyclic-files"), "missing key: {out}");
+        assert!(out.contains("cyclic-files"), "missing key: {out}");
         assert!(out.contains("\"pkg/a.py\""));
         assert!(out.contains("\"pkg/b.py\""));
     }
 
     #[test]
-    fn set_known_cyclic_files_replaces_existing_array() {
+    fn set_cyclic_files_replaces_existing_array() {
         let mut doc = parse(
-            "source-roots = [\"src\"]\n\n[cycles]\nknown-cyclic-files = [\"old/x.py\", \"old/y.py\"]\n",
+            "source-roots = [\"src\"]\n\n[cycles]\ncyclic-files = [\"old/x.py\", \"old/y.py\"]\n",
         );
-        set_known_cyclic_files(&mut doc, &strings(&["new/a.py"]));
+        set_cyclic_files(&mut doc, &strings(&["new/a.py"]));
         let out = doc.to_string();
         assert!(!out.contains("old/x.py"), "old entry not removed: {out}");
         assert!(!out.contains("old/y.py"), "old entry not removed: {out}");
@@ -289,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn set_known_cyclic_files_preserves_comments_and_other_keys() {
+    fn set_cyclic_files_preserves_comments_and_other_keys() {
         let input = "\
 # top-level comment
 source-roots = [\"src\"]
@@ -298,7 +298,7 @@ source-roots = [\"src\"]
 min-scc-size = 3 # keep this comment
 ";
         let mut doc = parse(input);
-        set_known_cyclic_files(&mut doc, &strings(&["pkg/a.py"]));
+        set_cyclic_files(&mut doc, &strings(&["pkg/a.py"]));
         let out = doc.to_string();
         assert!(
             out.contains("# top-level comment"),
@@ -313,13 +313,13 @@ min-scc-size = 3 # keep this comment
             out.contains("# keep this comment"),
             "lost inline comment: {out}"
         );
-        assert!(out.contains("known-cyclic-files"), "missing new key: {out}");
+        assert!(out.contains("cyclic-files"), "missing new key: {out}");
     }
 
     #[test]
-    fn set_known_cyclic_files_normalizes_backslashes() {
+    fn set_cyclic_files_normalizes_backslashes() {
         let mut doc = parse("source-roots = [\"src\"]\n");
-        set_known_cyclic_files(&mut doc, &strings(&["pkg\\a.py", "pkg\\sub\\b.py"]));
+        set_cyclic_files(&mut doc, &strings(&["pkg\\a.py", "pkg\\sub\\b.py"]));
         let out = doc.to_string();
         assert!(
             out.contains("\"pkg/a.py\""),
@@ -333,9 +333,9 @@ min-scc-size = 3 # keep this comment
     }
 
     #[test]
-    fn set_known_cyclic_files_sorts_paths() {
+    fn set_cyclic_files_sorts_paths() {
         let mut doc = parse("source-roots = [\"src\"]\n");
-        set_known_cyclic_files(&mut doc, &strings(&["c.py", "a.py", "b.py"]));
+        set_cyclic_files(&mut doc, &strings(&["c.py", "a.py", "b.py"]));
         let out = doc.to_string();
         let a = out.find("\"a.py\"").expect("a present");
         let b = out.find("\"b.py\"").expect("b present");
@@ -344,23 +344,23 @@ min-scc-size = 3 # keep this comment
     }
 
     #[test]
-    fn set_known_cyclic_files_writes_multiline_format() {
+    fn set_cyclic_files_writes_multiline_format() {
         let mut doc = parse("source-roots = [\"src\"]\n");
-        set_known_cyclic_files(&mut doc, &strings(&["a.py", "b.py"]));
+        set_cyclic_files(&mut doc, &strings(&["a.py", "b.py"]));
         let out = doc.to_string();
         assert!(
-            out.contains("known-cyclic-files = [\n    \"a.py\",\n    \"b.py\",\n]"),
+            out.contains("cyclic-files = [\n    \"a.py\",\n    \"b.py\",\n]"),
             "unexpected multiline format: {out}"
         );
     }
 
     #[test]
-    fn set_known_cyclic_files_roundtrips_via_config() {
+    fn set_cyclic_files_roundtrips_via_config() {
         let mut doc = parse("source-roots = [\"src\"]\n");
-        set_known_cyclic_files(&mut doc, &strings(&["pkg/b.py", "pkg/a.py"]));
+        set_cyclic_files(&mut doc, &strings(&["pkg/b.py", "pkg/a.py"]));
         let cfg = crate::config::Config::from_toml(&doc.to_string()).expect("valid config");
         assert_eq!(
-            cfg.cycles.known_cyclic_files,
+            cfg.cycles.cyclic_files,
             vec!["pkg/a.py".to_string(), "pkg/b.py".to_string()]
         );
     }
@@ -487,17 +487,14 @@ files = [\"a.py\", \"b.py\"]
         let path = file.path().to_path_buf();
 
         let result = patch_config_file(&path, |doc| {
-            set_known_cyclic_files(doc, &strings(&["pkg/a.py"]));
+            set_cyclic_files(doc, &strings(&["pkg/a.py"]));
         })
         .expect("patch ok");
         assert!(result.changed, "expected change");
         assert_eq!(result.path, path);
 
         let on_disk = std::fs::read_to_string(&path).expect("read");
-        assert!(
-            on_disk.contains("known-cyclic-files"),
-            "not written: {on_disk}"
-        );
+        assert!(on_disk.contains("cyclic-files"), "not written: {on_disk}");
         assert!(
             on_disk.contains("\"pkg/a.py\""),
             "path not written: {on_disk}"

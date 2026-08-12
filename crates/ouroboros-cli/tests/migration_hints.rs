@@ -50,7 +50,7 @@ fn ignore_migration_hint() {
     );
 }
 
-/// `--check-cyclic-files` with a pre-0.6.0 bare `known-cyclic-files` list fails
+/// `--check-cyclic-files` with a pre-0.6.0 bare `cyclic-files` list fails
 /// (exit 1) and emits the regeneration hint.
 #[test]
 fn check_cyclic_files_migration_hint() {
@@ -63,13 +63,13 @@ fn check_cyclic_files_migration_hint() {
     assert_eq!(
         output.status.code().unwrap(),
         1,
-        "should exit 1 when known-cyclic-files uses pre-0.6.0 paths; stderr was: {stderr}"
+        "should exit 1 when cyclic-files uses pre-0.6.0 paths; stderr was: {stderr}"
     );
 
-    // (b) emits the "known-cyclic-files uses pre-0.6.0" hint
+    // (b) emits the "cyclic-files uses pre-0.6.0" hint
     assert!(
-        stderr.contains("known-cyclic-files uses pre-0.6.0"),
-        "stderr should contain the known-cyclic-files migration hint; stderr was: {stderr}"
+        stderr.contains("cyclic-files uses pre-0.6.0"),
+        "stderr should contain the cyclic-files migration hint; stderr was: {stderr}"
     );
 }
 

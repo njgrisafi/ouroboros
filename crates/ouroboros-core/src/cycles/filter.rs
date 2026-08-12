@@ -154,8 +154,9 @@ mod tests {
         let config = CyclesConfig {
             min_scc_size: 2,
             max_scc_size: Some(2),
+            max_cycles: None,
             ignore: vec![],
-            known_cyclic_files: vec![],
+            cyclic_files: vec![],
             ignore_derived_ancestor_init: false,
             ignore_dirs: vec![],
         };
@@ -170,8 +171,9 @@ mod tests {
         let config = CyclesConfig {
             min_scc_size: 2,
             max_scc_size: Some(5),
+            max_cycles: None,
             ignore: vec![],
-            known_cyclic_files: vec![],
+            cyclic_files: vec![],
             ignore_derived_ancestor_init: false,
             ignore_dirs: vec![],
         };
@@ -187,8 +189,9 @@ mod tests {
         let config = CyclesConfig {
             min_scc_size: 2,
             max_scc_size: None,
+            max_cycles: None,
             ignore: vec![],
-            known_cyclic_files: vec![],
+            cyclic_files: vec![],
             ignore_derived_ancestor_init: false,
             ignore_dirs: vec![],
         };
@@ -212,8 +215,9 @@ mod tests {
         let config = CyclesConfig {
             min_scc_size: 2,
             max_scc_size: None,
+            max_cycles: None,
             ignore: vec![],
-            known_cyclic_files: vec![],
+            cyclic_files: vec![],
             ignore_derived_ancestor_init: false,
             ignore_dirs: vec![],
         };
