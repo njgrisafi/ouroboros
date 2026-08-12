@@ -1,20 +1,13 @@
-use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use super::FileDependencyGraph;
+use super::interned::{InternedGraph, NO_NODE};
 
 /// A single dependency cycle: a sorted list of file paths that form a cycle.
 pub type FileCycle = Vec<PathBuf>;
 
-/// Internal state for Tarjan's SCC algorithm.
-struct TarjanState {
-    index: usize,
-    indices: HashMap<PathBuf, usize>,
-    lowlinks: HashMap<PathBuf, usize>,
-    stack: Vec<PathBuf>,
-    on_stack: HashSet<PathBuf>,
-    components: Vec<Vec<PathBuf>>,
-}
+/// Sentinel for "not yet visited" in the Tarjan index array.
+const UNVISITED: u32 = NO_NODE;
 
 /// Compute all strongly connected components of the file dependency graph
 /// using Tarjan's algorithm.
@@ -24,33 +17,108 @@ struct TarjanState {
 /// - the list of SCCs is sorted by the first member of each SCC
 ///
 /// Includes singleton SCCs (size 1), even those without self-loops.
+///
+/// Internally the graph is interned to `u32` node ids and the algorithm is
+/// iterative, so deep import chains cannot overflow the call stack.
 pub fn strongly_connected_components(graph: &FileDependencyGraph) -> Vec<Vec<PathBuf>> {
-    let mut state = TarjanState {
-        index: 0,
-        indices: HashMap::new(),
-        lowlinks: HashMap::new(),
-        stack: Vec::new(),
-        on_stack: HashSet::new(),
-        components: Vec::new(),
-    };
+    // Interning assigns ids in lexicographic path order, so the traversal
+    // visits roots in the same order as the original PathBuf-keyed version.
+    let igraph = InternedGraph::new(graph);
+    let components = tarjan_scc(&igraph.adjacency);
 
-    // Visit every node in a deterministic order.
-    let mut nodes: Vec<&PathBuf> = graph.keys().collect();
-    nodes.sort();
+    // Map back to paths and impose the deterministic output order.
+    let mut result: Vec<Vec<PathBuf>> = components
+        .into_iter()
+        .map(|component| {
+            component
+                .into_iter()
+                .map(|id| igraph.path(id).clone())
+                .collect()
+        })
+        .collect();
+    for component in &mut result {
+        component.sort();
+    }
+    result.sort_by(|a, b| a[0].cmp(&b[0]));
+    result
+}
 
-    for node in nodes {
-        if !state.indices.contains_key(node) {
-            strongconnect(node, graph, &mut state);
+/// Iterative Tarjan's SCC over a `Vec`-indexed adjacency list.
+///
+/// Returns components in reverse topological discovery order (unsorted);
+/// callers sort as needed. `indices`, `lowlinks`, and the explicit call
+/// stack are all `Vec`-indexed by node id — no hashing in the hot loop.
+fn tarjan_scc(adjacency: &[Vec<u32>]) -> Vec<Vec<u32>> {
+    let node_count = adjacency.len();
+    let mut indices = vec![UNVISITED; node_count];
+    let mut lowlinks = vec![0u32; node_count];
+    let mut on_stack = vec![false; node_count];
+    let mut tarjan_stack: Vec<u32> = Vec::new();
+    let mut components: Vec<Vec<u32>> = Vec::new();
+    let mut next_index = 0u32;
+
+    // Explicit DFS call stack: (node, next child position to process).
+    let mut call_stack: Vec<(u32, usize)> = Vec::new();
+
+    for root in 0..node_count as u32 {
+        if indices[root as usize] != UNVISITED {
+            continue;
+        }
+
+        indices[root as usize] = next_index;
+        lowlinks[root as usize] = next_index;
+        next_index += 1;
+        tarjan_stack.push(root);
+        on_stack[root as usize] = true;
+        call_stack.push((root, 0));
+
+        while let Some(&mut (node, ref mut child_pos)) = call_stack.last_mut() {
+            let deps = &adjacency[node as usize];
+            if *child_pos < deps.len() {
+                let dep = deps[*child_pos];
+                *child_pos += 1;
+
+                if indices[dep as usize] == UNVISITED {
+                    // Tree edge: descend into dep.
+                    indices[dep as usize] = next_index;
+                    lowlinks[dep as usize] = next_index;
+                    next_index += 1;
+                    tarjan_stack.push(dep);
+                    on_stack[dep as usize] = true;
+                    call_stack.push((dep, 0));
+                } else if on_stack[dep as usize] {
+                    // Back edge to a node on the Tarjan stack.
+                    let node_lowlink = &mut lowlinks[node as usize];
+                    *node_lowlink = (*node_lowlink).min(indices[dep as usize]);
+                }
+                // Cross edge to a finished SCC: ignored.
+            } else {
+                // All deps processed: finish this node.
+                if lowlinks[node as usize] == indices[node as usize] {
+                    let mut component = Vec::new();
+                    loop {
+                        let w = tarjan_stack.pop().expect("Tarjan stack underflow");
+                        on_stack[w as usize] = false;
+                        let is_root = w == node;
+                        component.push(w);
+                        if is_root {
+                            break;
+                        }
+                    }
+                    components.push(component);
+                }
+                call_stack.pop();
+                // Propagate lowlink to the parent frame, if any.
+                if let Some(&(parent, _)) = call_stack.last() {
+                    let child_lowlink = lowlinks[node as usize];
+                    let parent_lowlink = &mut lowlinks[parent as usize];
+                    *parent_lowlink = (*parent_lowlink).min(child_lowlink);
+                }
+            }
         }
     }
 
-    // Sort each SCC internally, then sort the list of SCCs by first member.
-    for component in &mut state.components {
-        component.sort();
-    }
-    state.components.sort_by(|a, b| a[0].cmp(&b[0]));
-
-    state.components
+    components
 }
 
 /// Compute dependency cycles from the file dependency graph.
@@ -59,53 +127,18 @@ pub fn strongly_connected_components(graph: &FileDependencyGraph) -> Vec<Vec<Pat
 /// - SCCs with more than one member
 /// - SCCs with exactly one member that has a self-loop
 pub fn dependency_cycles(graph: &FileDependencyGraph) -> Vec<FileCycle> {
-    strongly_connected_components(graph)
-        .into_iter()
-        .filter(|scc| scc.len() > 1 || (scc.len() == 1 && has_self_loop(graph, &scc[0])))
-        .collect()
+    cycles_from_sccs(graph, &strongly_connected_components(graph))
 }
 
-/// Recursive Tarjan strongconnect for a single node.
-fn strongconnect(node: &PathBuf, graph: &FileDependencyGraph, state: &mut TarjanState) {
-    let idx = state.index;
-    state.indices.insert(node.clone(), idx);
-    state.lowlinks.insert(node.clone(), idx);
-    state.index += 1;
-    state.stack.push(node.clone());
-    state.on_stack.insert(node.clone());
-
-    // Visit dependencies.
-    if let Some(deps) = graph.get(node) {
-        for dep in deps {
-            if !state.indices.contains_key(dep) {
-                // Case A: dep not yet visited — recurse.
-                strongconnect(dep, graph, state);
-                let dep_lowlink = state.lowlinks[dep];
-                let node_lowlink = state.lowlinks.get_mut(node).unwrap();
-                *node_lowlink = (*node_lowlink).min(dep_lowlink);
-            } else if state.on_stack.contains(dep) {
-                // Case B: dep is on the stack — back edge.
-                let dep_index = state.indices[dep];
-                let node_lowlink = state.lowlinks.get_mut(node).unwrap();
-                *node_lowlink = (*node_lowlink).min(dep_index);
-            }
-        }
-    }
-
-    // If node is a root of an SCC, pop the stack to build the component.
-    if state.lowlinks[node] == state.indices[node] {
-        let mut component = Vec::new();
-        loop {
-            let w = state.stack.pop().unwrap();
-            state.on_stack.remove(&w);
-            let is_root = w == *node;
-            component.push(w);
-            if is_root {
-                break;
-            }
-        }
-        state.components.push(component);
-    }
+/// Filter precomputed SCCs down to real cycles, cloning only the kept SCCs.
+///
+/// Use this when the caller already needs the full SCC list (e.g. to map
+/// nodes to SCCs for trace analysis) so Tarjan's algorithm runs only once.
+pub fn cycles_from_sccs(graph: &FileDependencyGraph, sccs: &[Vec<PathBuf>]) -> Vec<FileCycle> {
+    sccs.iter()
+        .filter(|scc| scc.len() > 1 || (scc.len() == 1 && has_self_loop(graph, &scc[0])))
+        .cloned()
+        .collect()
 }
 
 /// Check whether a node has a self-loop (depends on itself).
@@ -120,10 +153,11 @@ fn has_self_loop(graph: &FileDependencyGraph, node: &PathBuf) -> bool {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+    use std::path::Path;
 
     /// Helper: build a `FileDependencyGraph` from `(node, &[dep])` pairs.
     fn make_graph(edges: &[(&str, &[&str])]) -> FileDependencyGraph {
-        let mut graph = FileDependencyGraph::new();
+        let mut graph = FileDependencyGraph::default();
         for (node, deps) in edges {
             let dep_set: BTreeSet<PathBuf> = deps.iter().map(PathBuf::from).collect();
             graph.insert(PathBuf::from(node), dep_set);
@@ -257,5 +291,40 @@ mod tests {
             cycles[1],
             vec![PathBuf::from("y.py"), PathBuf::from("z.py")]
         );
+    }
+
+    // Test 8: deep chain does not overflow the stack (iterative Tarjan).
+    #[test]
+    fn deep_chain_no_stack_overflow() {
+        let depth = 100_000;
+        let mut graph = FileDependencyGraph::default();
+        for i in 0..depth {
+            let node = PathBuf::from(format!("m{i:07}.py"));
+            let mut deps = BTreeSet::new();
+            if i + 1 < depth {
+                deps.insert(PathBuf::from(format!("m{:07}.py", i + 1)));
+            }
+            graph.insert(node, deps);
+        }
+        // One back edge from the deepest node to the root makes the whole
+        // chain a single SCC — the worst case for recursion depth.
+        graph
+            .get_mut(Path::new(&format!("m{:07}.py", depth - 1)))
+            .unwrap()
+            .insert(PathBuf::from("m0000000.py"));
+
+        let sccs = strongly_connected_components(&graph);
+        assert_eq!(sccs.len(), 1);
+        assert_eq!(sccs[0].len(), depth);
+    }
+
+    // Test 9: dep that is not a graph key is treated as a leaf node.
+    #[test]
+    fn dangling_dep_is_leaf() {
+        let graph = make_graph(&[("a.py", &["ext.py"])]);
+        let sccs = strongly_connected_components(&graph);
+        assert_eq!(sccs.len(), 2);
+        assert_eq!(sccs[0], vec![PathBuf::from("a.py")]);
+        assert_eq!(sccs[1], vec![PathBuf::from("ext.py")]);
     }
 }

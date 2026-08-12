@@ -1,14 +1,14 @@
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use crate::discovery::DiscoveryResult;
 
 /// A fast lookup index of all known first-party module names.
 ///
 /// Built from [`DiscoveryResult`] by collecting every discovered
-/// `PythonFile`'s dotted module name into a `HashSet`.
+/// `PythonFile`'s dotted module name into a hash set.
 #[derive(Debug)]
 pub struct ModuleIndex {
-    modules: HashSet<String>,
+    modules: FxHashSet<String>,
 }
 
 impl ModuleIndex {
@@ -18,7 +18,7 @@ impl ModuleIndex {
     /// all source roots and inserts its `module_name`. Empty module names
     /// (from root-level `__init__.py` files) are skipped.
     pub fn from_discovery(result: &DiscoveryResult) -> Self {
-        let mut modules = HashSet::new();
+        let mut modules = FxHashSet::default();
 
         for root in &result.roots {
             for file in &root.files {

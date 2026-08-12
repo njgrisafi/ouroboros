@@ -1,10 +1,15 @@
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::discovery::error::DiscoveryError;
 
 /// Recursively walk `root` and collect all `.py` file paths.
 ///
 /// Returns paths relative to `root`, sorted for deterministic output.
+///
+/// Uses the `ignore` crate's parallel walker for speed on large trees, with
+/// all ignore-file handling (`.gitignore`, `.ignore`, hidden-file skipping)
+/// disabled so the file set matches a plain recursive `read_dir` walk.
 pub(crate) fn walk_python_files(root: &Path) -> Result<Vec<PathBuf>, DiscoveryError> {
     if !root.is_dir() {
         return Err(DiscoveryError::InvalidSourceRoot {
@@ -17,47 +22,100 @@ pub(crate) fn walk_python_files(root: &Path) -> Result<Vec<PathBuf>, DiscoveryEr
         });
     }
 
-    let mut files = Vec::new();
-    collect_python_files(root, root, &mut files)?;
+    let files: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+    let walk_error: Mutex<Option<DiscoveryError>> = Mutex::new(None);
+
+    let mut builder = CollectorBuilder {
+        global: &files,
+        root,
+        error: &walk_error,
+    };
+
+    ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .ignore(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .parents(false)
+        .follow_links(false)
+        .build_parallel()
+        .visit(&mut builder);
+
+    if let Some(error) = walk_error.into_inner().expect("walk_error mutex poisoned") {
+        return Err(error);
+    }
+
+    let mut files = files.into_inner().expect("files mutex poisoned");
     files.sort();
     Ok(files)
 }
 
-/// Recursively descend into `dir`, collecting `.py` files relative to `root`.
-fn collect_python_files(
-    root: &Path,
-    dir: &Path,
-    out: &mut Vec<PathBuf>,
-) -> Result<(), DiscoveryError> {
-    let entries = std::fs::read_dir(dir).map_err(|e| DiscoveryError::Walk {
-        root: root.to_path_buf(),
-        source: e,
-    })?;
+struct CollectorBuilder<'a> {
+    global: &'a Mutex<Vec<PathBuf>>,
+    root: &'a Path,
+    error: &'a Mutex<Option<DiscoveryError>>,
+}
 
-    for entry in entries {
-        let entry = entry.map_err(|e| DiscoveryError::Walk {
-            root: root.to_path_buf(),
-            source: e,
-        })?;
-        let path = entry.path();
-        let file_type = entry.file_type().map_err(|e| DiscoveryError::Walk {
-            root: root.to_path_buf(),
-            source: e,
-        })?;
-
-        if file_type.is_dir() {
-            collect_python_files(root, &path, out)?;
-        } else if file_type.is_file()
-            && let Some(ext) = path.extension()
-            && ext == "py"
-        {
-            // Unwrap is safe: `path` is under `root` by construction.
-            let rel = path.strip_prefix(root).expect("path is under root");
-            out.push(rel.to_path_buf());
-        }
+impl<'s, 'a: 's> ignore::ParallelVisitorBuilder<'s> for CollectorBuilder<'a> {
+    fn build(&mut self) -> Box<dyn ignore::ParallelVisitor + 's> {
+        Box::new(Collector {
+            local: Vec::new(),
+            global: self.global,
+            root: self.root,
+            error: self.error,
+        })
     }
+}
 
-    Ok(())
+/// Per-thread walk visitor: accumulates matches locally and flushes them to
+/// the shared vector once on drop, avoiding per-file lock contention.
+struct Collector<'a> {
+    local: Vec<PathBuf>,
+    global: &'a Mutex<Vec<PathBuf>>,
+    root: &'a Path,
+    error: &'a Mutex<Option<DiscoveryError>>,
+}
+
+impl ignore::ParallelVisitor for Collector<'_> {
+    fn visit(&mut self, entry: Result<ignore::DirEntry, ignore::Error>) -> ignore::WalkState {
+        match entry {
+            Ok(entry) => {
+                // Symlinks are not followed (follow_links(false)), so a
+                // symlinked file reports is_file() == false here — matching
+                // the previous read_dir walk, which also skipped them.
+                let is_python_file = entry.file_type().is_some_and(|ft| ft.is_file())
+                    && entry.path().extension().is_some_and(|ext| ext == "py");
+                if is_python_file {
+                    // Unwrap is safe: `path` is under `root` by construction.
+                    let rel = entry
+                        .path()
+                        .strip_prefix(self.root)
+                        .expect("path is under root");
+                    self.local.push(rel.to_path_buf());
+                }
+            }
+            Err(err) => {
+                let mut guard = self.error.lock().expect("walk_error mutex poisoned");
+                if guard.is_none() {
+                    *guard = Some(DiscoveryError::Walk {
+                        root: self.root.to_path_buf(),
+                        source: std::io::Error::other(err.to_string()),
+                    });
+                }
+            }
+        }
+        ignore::WalkState::Continue
+    }
+}
+
+impl Drop for Collector<'_> {
+    fn drop(&mut self) {
+        self.global
+            .lock()
+            .expect("files mutex poisoned")
+            .append(&mut self.local);
+    }
 }
 
 #[cfg(test)]
@@ -86,6 +144,29 @@ mod tests {
                 PathBuf::from("app.py"),
                 PathBuf::from("core/__init__.py"),
                 PathBuf::from("core/engine.py"),
+            ]
+        );
+    }
+
+    #[test]
+    fn hidden_and_ignored_files_are_included() {
+        // All ignore-file handling is disabled: dotfiles, dot-directories,
+        // and .gitignore'd paths must all be walked.
+        let tmp = make_tree(&[
+            ".hidden.py",
+            ".git/config.py",
+            "ignored/generated.py",
+            "kept.py",
+        ]);
+        fs::write(tmp.path().join(".gitignore"), "ignored/\n").unwrap();
+        let files = walk_python_files(tmp.path()).unwrap();
+        assert_eq!(
+            files,
+            vec![
+                PathBuf::from(".git/config.py"),
+                PathBuf::from(".hidden.py"),
+                PathBuf::from("ignored/generated.py"),
+                PathBuf::from("kept.py"),
             ]
         );
     }

@@ -1,13 +1,15 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
+
+use rustc_hash::FxHashMap;
 
 use crate::discovery::DiscoveryResult;
 use crate::resolver::ResolveResult;
 
-pub type FileDependencyGraph = HashMap<PathBuf, BTreeSet<PathBuf>>;
+pub type FileDependencyGraph = FxHashMap<PathBuf, BTreeSet<PathBuf>>;
 
 pub struct EdgeMetadata {
-    pub lines: HashMap<(PathBuf, PathBuf), Vec<u32>>,
+    pub lines: FxHashMap<(PathBuf, PathBuf), Vec<u32>>,
 }
 
 pub struct FileGraphResult {
@@ -20,8 +22,8 @@ pub fn build_file_dependency_graph(
     discovery: &DiscoveryResult,
     resolve_result: &ResolveResult,
 ) -> FileGraphResult {
-    let mut module_to_path: HashMap<&str, &PathBuf> = HashMap::new();
-    let mut collisions: HashMap<&str, Vec<&PathBuf>> = HashMap::new();
+    let mut module_to_path: FxHashMap<&str, &PathBuf> = FxHashMap::default();
+    let mut collisions: FxHashMap<&str, Vec<&PathBuf>> = FxHashMap::default();
 
     for root in &discovery.roots {
         for file in &root.files {
@@ -51,14 +53,14 @@ pub fn build_file_dependency_graph(
         })
         .collect();
 
-    let mut graph: FileDependencyGraph = HashMap::new();
+    let mut graph: FileDependencyGraph = FxHashMap::default();
     for root in &discovery.roots {
         for file in &root.files {
             graph.entry(file.rel_path.clone()).or_default();
         }
     }
 
-    let mut edge_lines: HashMap<(PathBuf, PathBuf), Vec<u32>> = HashMap::new();
+    let mut edge_lines: FxHashMap<(PathBuf, PathBuf), Vec<u32>> = FxHashMap::default();
 
     for dep in &resolve_result.deps {
         let from_path = module_to_path.get(dep.source.as_str()).cloned();

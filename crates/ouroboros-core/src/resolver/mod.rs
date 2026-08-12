@@ -15,6 +15,8 @@ mod string;
 pub use error::ResolveError;
 pub use index::ModuleIndex;
 
+use rayon::prelude::*;
+
 use crate::config::Config;
 use crate::discovery::DiscoveryResult;
 use crate::parser::RawImport;
@@ -138,80 +140,130 @@ pub enum ExtractEvent<'a> {
     },
 }
 
-/// Resolve all imports for every discovered file in the project.
+/// Why extraction failed for a file.
+enum ParseFailure {
+    /// The file could not be read from disk.
+    Read(String),
+    /// The file could not be parsed as Python.
+    Parse(String),
+}
+
+/// A discovered file plus its extracted imports, produced by [`parse_all`].
 ///
-/// Reads each Python source file, extracts imports, and resolves them
-/// against the first-party module index. Returns aggregated, deduplicated
-/// results.
+/// `imports` is `None` when the file could not be read or parsed; the reason
+/// is in `failure`. Retaining parsed imports lets callers resolve the same
+/// files under multiple [`Config`]s (e.g. the direct-only baseline pass)
+/// without re-reading or re-parsing.
+pub struct ParsedFile<'a> {
+    file: &'a crate::discovery::PythonFile,
+    abs_path: std::path::PathBuf,
+    imports: Option<Vec<RawImport>>,
+    failure: Option<ParseFailure>,
+}
+
+/// Read and parse every discovered file in parallel, in discovery order.
 ///
-/// Files that cannot be read or parsed are silently skipped; pass `sink` to
-/// observe per-file extraction outcomes (warnings are the CLI's
-/// responsibility).
-pub fn resolve_all(
-    discovery: &DiscoveryResult,
+/// Files that cannot be read or parsed are recorded with `imports: None`;
+/// pass `sink` to observe per-file extraction outcomes (warnings are the
+/// CLI's responsibility). Sink events are replayed in discovery order after
+/// the parallel phase, so observable ordering matches a sequential walk.
+pub fn parse_all<'a>(
+    discovery: &'a DiscoveryResult,
+    options: &crate::parser::ExtractOptions,
+    project_root: &std::path::Path,
+    sink: Option<&mut dyn FnMut(ExtractEvent<'_>)>,
+) -> Vec<ParsedFile<'a>> {
+    let files: Vec<&crate::discovery::PythonFile> = discovery
+        .roots
+        .iter()
+        .flat_map(|root| root.files.iter())
+        .collect();
+
+    // Indexed parallel iterator: `collect` preserves discovery order.
+    let parsed: Vec<ParsedFile> = files
+        .par_iter()
+        .map(|file| {
+            let abs_path = project_root.join(&file.rel_path);
+            let (imports, failure) = match std::fs::read_to_string(&abs_path) {
+                Ok(source) => match crate::parser::extract_imports(&source, options) {
+                    Ok(imports) => (Some(imports), None),
+                    Err(e) => (None, Some(ParseFailure::Parse(e.to_string()))),
+                },
+                Err(e) => (None, Some(ParseFailure::Read(e.to_string()))),
+            };
+            ParsedFile {
+                file,
+                abs_path,
+                imports,
+                failure,
+            }
+        })
+        .collect();
+
+    if let Some(sink) = sink {
+        for parsed_file in &parsed {
+            match (&parsed_file.imports, &parsed_file.failure) {
+                (Some(imports), None) => sink(ExtractEvent::Imports {
+                    module: &parsed_file.file.module_name,
+                    imports,
+                }),
+                (None, Some(ParseFailure::Read(message))) => sink(ExtractEvent::ReadError {
+                    path: &parsed_file.abs_path,
+                    message: message.clone(),
+                }),
+                (None, Some(ParseFailure::Parse(message))) => sink(ExtractEvent::ParseError {
+                    module: &parsed_file.file.module_name,
+                    message: message.clone(),
+                }),
+                (None, None) => unreachable!("imports and failure cannot both be absent"),
+                (Some(_), Some(_)) => unreachable!("imports and failure cannot both be present"),
+            }
+        }
+    }
+
+    parsed
+}
+
+/// Resolve previously parsed imports against the first-party module index,
+/// in parallel. Returns aggregated, deduplicated results.
+pub fn resolve_parsed(
+    parsed: &[ParsedFile<'_>],
     index: &ModuleIndex,
     config: &Config,
-    project_root: &std::path::Path,
-    mut sink: Option<&mut dyn FnMut(ExtractEvent<'_>)>,
 ) -> ResolveResult {
-    let extract_options = crate::parser::ExtractOptions::from(&config.parse);
-    // Hoisted out of the loop: only `source_is_package` varies per file.
-    let mut resolve_options = ResolveOptions {
+    let base_options = ResolveOptions {
         include_ancestor_init: config.resolve.include_ancestor_init,
         source_is_package: false,
         string_imports_mode: config.parse.string_imports_mode,
         string_imports_min_dots: config.parse.string_imports_min_dots,
     };
-    let mut all_deps = Vec::new();
-    let mut all_unresolved = Vec::new();
-    let mut all_suppressed = Vec::new();
 
-    for root in &discovery.roots {
-        for file in &root.files {
-            let abs_path = project_root.join(&file.rel_path);
-
-            let source = match std::fs::read_to_string(&abs_path) {
-                Ok(s) => s,
-                Err(e) => {
-                    if let Some(sink) = sink.as_deref_mut() {
-                        sink(ExtractEvent::ReadError {
-                            path: &abs_path,
-                            message: e.to_string(),
-                        });
-                    }
-                    continue;
-                }
-            };
-
-            let imports = match crate::parser::extract_imports(&source, &extract_options) {
-                Ok(imports) => imports,
-                Err(e) => {
-                    if let Some(sink) = sink.as_deref_mut() {
-                        sink(ExtractEvent::ParseError {
-                            module: &file.module_name,
-                            message: e.to_string(),
-                        });
-                    }
-                    continue;
-                }
-            };
-
-            if let Some(sink) = sink.as_deref_mut() {
-                sink(ExtractEvent::Imports {
-                    module: &file.module_name,
-                    imports: &imports,
-                });
-            }
-
-            resolve_options.source_is_package = file
+    let resolutions: Vec<FileResolution> = parsed
+        .par_iter()
+        .filter_map(|parsed_file| {
+            let imports = parsed_file.imports.as_ref()?;
+            let mut options = base_options;
+            options.source_is_package = parsed_file
+                .file
                 .rel_path
                 .file_name()
                 .is_some_and(|name| name == "__init__.py");
-            let resolution = resolve_file(&file.module_name, &imports, index, &resolve_options);
-            all_deps.extend(resolution.deps);
-            all_unresolved.extend(resolution.unresolved);
-            all_suppressed.extend(resolution.suppressed_ancestor_edges);
-        }
+            Some(resolve_file(
+                &parsed_file.file.module_name,
+                imports,
+                index,
+                &options,
+            ))
+        })
+        .collect();
+
+    let mut all_deps = Vec::new();
+    let mut all_unresolved = Vec::new();
+    let mut all_suppressed = Vec::new();
+    for resolution in resolutions {
+        all_deps.extend(resolution.deps);
+        all_unresolved.extend(resolution.unresolved);
+        all_suppressed.extend(resolution.suppressed_ancestor_edges);
     }
 
     // Deduplicate deps (same source→target edge may appear from multiple
@@ -242,4 +294,33 @@ pub fn resolve_all(
         unresolved: all_unresolved,
         suppressed_ancestor_edges: all_suppressed,
     }
+}
+
+/// Resolve all imports for every discovered file in the project.
+///
+/// Reads each Python source file, extracts imports, and resolves them
+/// against the first-party module index. Returns aggregated, deduplicated
+/// results.
+///
+/// Files that cannot be read or parsed are silently skipped; pass `sink` to
+/// observe per-file extraction outcomes (warnings are the CLI's
+/// responsibility).
+///
+/// Equivalent to [`parse_all`] followed by [`resolve_parsed`]; callers that
+/// resolve the same files under more than one [`Config`] should use those
+/// directly to avoid re-parsing.
+pub fn resolve_all(
+    discovery: &DiscoveryResult,
+    index: &ModuleIndex,
+    config: &Config,
+    project_root: &std::path::Path,
+    sink: Option<&mut dyn FnMut(ExtractEvent<'_>)>,
+) -> ResolveResult {
+    let parsed = parse_all(
+        discovery,
+        &crate::parser::ExtractOptions::from(&config.parse),
+        project_root,
+        sink,
+    );
+    resolve_parsed(&parsed, index, config)
 }

@@ -1,15 +1,18 @@
 pub mod build;
 pub mod impact;
+pub mod interned;
 pub mod restore;
 pub mod scc;
 
 pub use build::{EdgeMetadata, FileDependencyGraph, FileGraphResult, build_file_dependency_graph};
 pub use impact::{
-    Condensation, PathKind, PathMatch, ReachableCycle, apply_exclusions, condensation, match_path,
-    nodes_reaching_cycles, reachable_cycles_from, reachable_cycles_from_pruned, reachable_from,
+    PathKind, PathMatch, ReachableCycle, apply_exclusions, cycle_scc_flags, interned_node_to_scc,
+    interned_nodes_reaching_cycles, interned_reachable_cycles, match_path, reachable_from,
+    scc_of_path,
 };
+pub use interned::InternedGraph;
 pub use restore::restore_self_ancestor_init_edges;
-pub use scc::{FileCycle, dependency_cycles, strongly_connected_components};
+pub use scc::{FileCycle, cycles_from_sccs, dependency_cycles, strongly_connected_components};
 
 pub fn strip_source_root_prefix(
     path: &std::path::Path,
