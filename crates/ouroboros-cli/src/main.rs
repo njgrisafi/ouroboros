@@ -346,73 +346,54 @@ fn main() {
         }
     };
 
-    // Extract imports from each discovered file.
+    // Build first-party module index, then extract and resolve imports in a
+    // single pass. The sink observes per-file extraction so verbose mode can
+    // print imports (and all modes can warn on unreadable/unparseable files)
+    // without a second parse.
     spinner.set_message(format!(
-        "Extracting imports from {} files...",
+        "Extracting and resolving imports from {} files...",
         discovery_result.total_files()
     ));
     if verbose {
         println!("\n--- imports ---");
         println!("project root: {}", project_root.display());
     }
-    for root in &discovery_result.roots {
-        if verbose {
-            println!(
-                "source root: {} ({} files)",
-                root.path.display(),
-                root.files.len()
-            );
-        }
-        for file in &root.files {
-            let abs_path = project_root.join(&file.rel_path);
-            let source = match std::fs::read_to_string(&abs_path) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("  warning: could not read {}: {e}", abs_path.display());
-                    continue;
-                }
-            };
-
-            let extract_options = parser::ExtractOptions {
-                include_local: config.parse.local_imports,
-                string_imports: config.parse.string_imports,
-                string_imports_mode: config.parse.string_imports_mode,
-                string_imports_min_dots: config.parse.string_imports_min_dots,
-            };
-            match parser::extract_imports(&source, &extract_options) {
-                Ok(imports) if imports.is_empty() => {}
-                Ok(imports) => {
-                    if verbose {
-                        println!("\n  {}:", file.module_name);
-                        for imp in &imports {
-                            let module_part = imp.module.as_deref().unwrap_or("");
-                            let dots = ".".repeat(imp.level as usize);
-                            let names: Vec<&str> =
-                                imp.names.iter().map(|n| n.name.as_str()).collect();
-                            println!(
-                                "    {kind} {dots}{module} ({names})",
-                                kind = match imp.kind {
-                                    parser::ImportKind::Import => "import",
-                                    parser::ImportKind::ImportFrom => "from  ",
-                                    parser::ImportKind::StringImport => "string",
-                                },
-                                module = module_part,
-                                names = names.join(", "),
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("  warning: parse error in {}: {e}", file.module_name);
+    let mut extract_sink = |event: resolver::ExtractEvent| match event {
+        resolver::ExtractEvent::Imports { module, imports } => {
+            if verbose && !imports.is_empty() {
+                println!("\n  {module}:");
+                for imp in imports {
+                    let module_part = imp.module.as_deref().unwrap_or("");
+                    let dots = ".".repeat(imp.level as usize);
+                    let names: Vec<&str> = imp.names.iter().map(|n| n.name.as_str()).collect();
+                    println!(
+                        "    {kind} {dots}{module} ({names})",
+                        kind = match imp.kind {
+                            parser::ImportKind::Import => "import",
+                            parser::ImportKind::ImportFrom => "from  ",
+                            parser::ImportKind::StringImport => "string",
+                        },
+                        module = module_part,
+                        names = names.join(", "),
+                    );
                 }
             }
         }
-    }
-
-    // Build first-party module index and resolve imports.
-    spinner.set_message("Resolving imports...");
+        resolver::ExtractEvent::ReadError { path, message } => {
+            eprintln!("  warning: could not read {}: {message}", path.display());
+        }
+        resolver::ExtractEvent::ParseError { module, message } => {
+            eprintln!("  warning: parse error in {module}: {message}");
+        }
+    };
     let index = resolver::ModuleIndex::from_discovery(&discovery_result);
-    let resolve_result = resolver::resolve_all(&discovery_result, &index, &config, &project_root);
+    let resolve_result = resolver::resolve_all(
+        &discovery_result,
+        &index,
+        &config,
+        &project_root,
+        Some(&mut extract_sink),
+    );
 
     if verbose {
         println!(
@@ -535,8 +516,13 @@ fn main() {
         // Reuses the same index (edge-independent) and excluded set (path-keyed).
         let mut direct_config = config.clone();
         direct_config.resolve.include_ancestor_init = false;
-        let direct_resolve =
-            resolver::resolve_all(&discovery_result, &index, &direct_config, &project_root);
+        let direct_resolve = resolver::resolve_all(
+            &discovery_result,
+            &index,
+            &direct_config,
+            &project_root,
+            None,
+        );
         let direct_graph = graph::build_file_dependency_graph(&discovery_result, &direct_resolve);
         let direct_effective = if excluded.is_empty() {
             direct_graph.graph
