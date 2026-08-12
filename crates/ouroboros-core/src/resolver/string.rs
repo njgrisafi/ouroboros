@@ -2,7 +2,7 @@
 //! imports") against the first-party module index.
 
 use super::index::ModuleIndex;
-use super::resolve::push_ancestor_package_deps;
+use super::resolve::emit_resolved_edge;
 use super::{ResolveOptions, ResolvedDep, SuppressedAncestorEdge};
 use crate::parser::{RawImport, StringImportsMode};
 
@@ -77,14 +77,15 @@ fn resolve_candidate(
         if prefix == source_module {
             return;
         }
-        if options.include_ancestor_init {
-            push_ancestor_package_deps(source_module, &prefix, line, index, deps, suppressed);
-        }
-        deps.push(ResolvedDep {
-            source: source_module.to_string(),
-            target: prefix,
+        emit_resolved_edge(
+            source_module,
+            &prefix,
             line,
-        });
+            index,
+            options,
+            deps,
+            suppressed,
+        );
         return;
     }
 }

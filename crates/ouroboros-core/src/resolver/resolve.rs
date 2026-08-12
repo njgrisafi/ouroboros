@@ -101,7 +101,7 @@ fn is_ancestor_or_self(candidate: &str, module: &str) -> bool {
 /// bogus `P <-> P.child` cycle whenever `P/__init__.py` re-exports a
 /// submodule. Cross-tree ancestor edges (e.g. `foo.x` importing `bar.y` yields
 /// an edge to `bar`) are real and preserved.
-pub(super) fn push_ancestor_package_deps(
+fn push_ancestor_package_deps(
     source_module: &str,
     target: &str,
     line: u32,
@@ -139,6 +139,30 @@ pub(super) fn push_ancestor_package_deps(
     }
 }
 
+/// Emit a resolved dependency edge on `target`: ancestor-package edges first
+/// (when `include_ancestor_init` is on), then the direct edge.
+///
+/// Edge order within a file is not observable downstream — `resolve_all`
+/// sorts and dedups — so all resolution paths share this one emission order.
+pub(super) fn emit_resolved_edge(
+    source_module: &str,
+    target: &str,
+    line: u32,
+    index: &ModuleIndex,
+    options: &ResolveOptions,
+    deps: &mut Vec<ResolvedDep>,
+    suppressed: &mut Vec<SuppressedAncestorEdge>,
+) {
+    if options.include_ancestor_init {
+        push_ancestor_package_deps(source_module, target, line, index, deps, suppressed);
+    }
+    deps.push(ResolvedDep {
+        source: source_module.to_string(),
+        target: target.to_string(),
+        line,
+    });
+}
+
 /// Resolve an `import X` statement.
 ///
 /// Each name in the import is a full module path (e.g. `import os` or
@@ -154,21 +178,15 @@ fn resolve_import_stmt(
 ) {
     for name in &imp.names {
         if index.contains(&name.name) {
-            deps.push(ResolvedDep {
-                source: source_module.to_string(),
-                target: name.name.clone(),
-                line: imp.line,
-            });
-            if options.include_ancestor_init {
-                push_ancestor_package_deps(
-                    source_module,
-                    &name.name,
-                    imp.line,
-                    index,
-                    deps,
-                    suppressed,
-                );
-            }
+            emit_resolved_edge(
+                source_module,
+                &name.name,
+                imp.line,
+                index,
+                options,
+                deps,
+                suppressed,
+            );
         } else {
             unresolved.push(UnresolvedImport {
                 source: source_module.to_string(),
@@ -245,21 +263,15 @@ fn resolve_import_from_stmt(
         };
 
         if index.contains(&qualified) {
-            if options.include_ancestor_init {
-                push_ancestor_package_deps(
-                    source_module,
-                    &qualified,
-                    imp.line,
-                    index,
-                    deps,
-                    suppressed,
-                );
-            }
-            deps.push(ResolvedDep {
-                source: source_module.to_string(),
-                target: qualified,
-                line: imp.line,
-            });
+            emit_resolved_edge(
+                source_module,
+                &qualified,
+                imp.line,
+                index,
+                options,
+                deps,
+                suppressed,
+            );
             any_resolved = true;
         }
     }
@@ -267,21 +279,15 @@ fn resolve_import_from_stmt(
     // If no imported names resolved as submodules, the names must be symbols
     // inside the base module — add the base module itself as the dependency.
     if !any_resolved && !base_module.is_empty() && index.contains(&base_module) {
-        if options.include_ancestor_init {
-            push_ancestor_package_deps(
-                source_module,
-                &base_module,
-                imp.line,
-                index,
-                deps,
-                suppressed,
-            );
-        }
-        deps.push(ResolvedDep {
-            source: source_module.to_string(),
-            target: base_module.clone(),
-            line: imp.line,
-        });
+        emit_resolved_edge(
+            source_module,
+            &base_module,
+            imp.line,
+            index,
+            options,
+            deps,
+            suppressed,
+        );
         any_resolved = true;
     }
 
