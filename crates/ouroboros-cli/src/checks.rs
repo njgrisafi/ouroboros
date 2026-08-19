@@ -90,17 +90,5 @@ pub fn run_check_cyclic_files(config: &Config, cyclic_files: &[PathBuf]) -> ! {
     for path in &removed {
         eprintln!("  - {path}");
     }
-    let all_added_are_prefixed = !added.is_empty()
-        && config.source_roots.iter().any(|root| {
-            let prefix = root.trim_end_matches('/').to_string() + "/";
-            removed
-                .iter()
-                .all(|r| added.iter().any(|a| a.as_str() == format!("{prefix}{r}")))
-        });
-    if all_added_are_prefixed {
-        eprintln!(
-            "  hint: cyclic-files uses pre-0.6.0 source-root-relative paths; run 'oboros --dump-cyclic-files' to regenerate."
-        );
-    }
     std::process::exit(1);
 }

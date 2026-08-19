@@ -51,7 +51,7 @@ fn ignore_migration_hint() {
 }
 
 /// `--check-cyclic-files` with a pre-0.6.0 bare `cyclic-files` list fails
-/// (exit 1) and emits the regeneration hint.
+/// (exit 1) with a diff.
 #[test]
 fn check_cyclic_files_migration_hint() {
     let cfg = fixture_config("cyclic_migration_hint");
@@ -59,17 +59,14 @@ fn check_cyclic_files_migration_hint() {
 
     let stderr = String::from_utf8(output.stderr).unwrap();
 
-    // (a) exits 1
     assert_eq!(
         output.status.code().unwrap(),
         1,
         "should exit 1 when cyclic-files uses pre-0.6.0 paths; stderr was: {stderr}"
     );
-
-    // (b) emits the "cyclic-files uses pre-0.6.0" hint
     assert!(
-        stderr.contains("cyclic-files uses pre-0.6.0"),
-        "stderr should contain the cyclic-files migration hint; stderr was: {stderr}"
+        stderr.contains("+ src/app/a.py") && stderr.contains("- app/a.py"),
+        "stderr should show the path-format diff; stderr was: {stderr}"
     );
 }
 
