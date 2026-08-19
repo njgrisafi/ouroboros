@@ -102,6 +102,5 @@ pub fn run_check_cyclic_files(config: &Config, cyclic_files: &[PathBuf]) -> ! {
             "  hint: cyclic-files uses pre-0.6.0 source-root-relative paths; run 'oboros --dump-cyclic-files' to regenerate."
         );
     }
-    eprintln!("run `oboros --dump-cyclic-files` to update [cycles] cyclic-files in oboros.toml");
     std::process::exit(1);
 }
