@@ -1,0 +1,2 @@
+class BaseInPlaceAccessor:
+    pass

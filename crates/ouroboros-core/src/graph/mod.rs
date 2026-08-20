@@ -4,7 +4,10 @@ pub mod interned;
 pub mod restore;
 pub mod scc;
 
-pub use build::{EdgeMetadata, FileDependencyGraph, FileGraphResult, build_file_dependency_graph};
+pub use build::{
+    EdgeMetadata, FileDependencyGraph, FileGraphResult, build_file_dependency_graph,
+    induced_subgraph_on,
+};
 pub use impact::{
     PathKind, PathMatch, ReachableCycle, apply_exclusions, cycle_scc_flags, interned_node_to_scc,
     interned_nodes_reaching_cycles, interned_reachable_cycles, match_path, reachable_from,

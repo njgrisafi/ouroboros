@@ -82,6 +82,25 @@ pub fn build_file_dependency_graph(
     }
 }
 
+/// Restrict `graph` to edges whose endpoints are both in `members`.
+pub fn induced_subgraph_on(
+    graph: &FileDependencyGraph,
+    members: &BTreeSet<PathBuf>,
+) -> FileDependencyGraph {
+    let mut result = FileDependencyGraph::default();
+    for member in members {
+        let deps = graph
+            .get(member)
+            .into_iter()
+            .flat_map(|targets| targets.iter())
+            .filter(|target| members.contains(*target))
+            .cloned()
+            .collect();
+        result.insert(member.clone(), deps);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -235,5 +254,32 @@ mod tests {
 
         let result = build_file_dependency_graph(&discovery, &resolve);
         assert!(result.module_collisions.is_empty());
+    }
+
+    #[test]
+    fn induced_subgraph_on_keeps_edges_within_members() {
+        let mut graph = FileDependencyGraph::default();
+        graph.insert(
+            PathBuf::from("a.py"),
+            BTreeSet::from([PathBuf::from("b.py")]),
+        );
+        graph.insert(
+            PathBuf::from("b.py"),
+            BTreeSet::from([PathBuf::from("c.py")]),
+        );
+        graph.insert(PathBuf::from("c.py"), BTreeSet::new());
+
+        let members = BTreeSet::from([PathBuf::from("a.py"), PathBuf::from("b.py")]);
+        let subgraph = induced_subgraph_on(&graph, &members);
+
+        assert_eq!(
+            subgraph.get(&PathBuf::from("a.py")).unwrap(),
+            &BTreeSet::from([PathBuf::from("b.py")])
+        );
+        assert_eq!(
+            subgraph.get(&PathBuf::from("b.py")).unwrap(),
+            &BTreeSet::new()
+        );
+        assert!(!subgraph.contains_key(&PathBuf::from("c.py")));
     }
 }

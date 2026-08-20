@@ -126,10 +126,11 @@ struct Cli {
     #[arg(long)]
     show_cyclic_files: bool,
 
-    /// When set, files that become cyclic only via a derived ancestor-__init__.py edge
-    /// are excluded from the cyclic-files baseline. Overrides
-    /// [cycles] ignore-derived-ancestor-init in config. Baseline-only; does not affect
-    /// the normal cycle report.
+    /// Direct-fallback baseline: keep direct-only SCC members; for cycles entirely
+    /// absent from that baseline (derived ancestor-init closes the loop), include
+    /// all SCC members from the normal report. Overrides [cycles]
+    /// ignore-derived-ancestor-init in config. Baseline-only; does not affect the
+    /// normal cycle report.
     #[arg(long = "ignore-derived-ancestor-init")]
     ignore_derived_ancestor_init: bool,
 
@@ -223,6 +224,24 @@ fn traced_has_impacts(traced: &[output::JsonTrace]) -> bool {
     traced
         .iter()
         .any(|trace| trace.files.iter().any(|file| !file.impacts.is_empty()))
+}
+
+fn build_direct_effective_graph(
+    parsed: &[resolver::ParsedFile<'_>],
+    index: &resolver::ModuleIndex,
+    config: &Config,
+    discovery_result: &discovery::DiscoveryResult,
+    excluded: &std::collections::HashSet<std::path::PathBuf>,
+) -> graph::FileDependencyGraph {
+    let mut direct_config = config.clone();
+    direct_config.resolve.include_ancestor_init = false;
+    let direct_resolve = resolver::resolve_parsed(parsed, index, &direct_config);
+    let direct_graph = graph::build_file_dependency_graph(discovery_result, &direct_resolve);
+    if excluded.is_empty() {
+        direct_graph.graph
+    } else {
+        graph::apply_exclusions(&direct_graph.graph, excluded)
+    }
 }
 
 fn main() {
@@ -544,23 +563,9 @@ fn main() {
         && config.resolve.include_ancestor_init
         && cyclic_surface_active
     {
-        // Direct-only pass: resolve without ancestor-init edges to compute the baseline.
-        // Reuses the parsed imports (no re-read/re-parse), the same index
-        // (edge-independent), and the excluded set (path-keyed).
-        let mut direct_config = config.clone();
-        direct_config.resolve.include_ancestor_init = false;
-        let direct_resolve = resolver::resolve_parsed(&parsed, &index, &direct_config);
-        let direct_graph = graph::build_file_dependency_graph(&discovery_result, &direct_resolve);
-        let direct_effective = if excluded.is_empty() {
-            direct_graph.graph
-        } else {
-            graph::apply_exclusions(&direct_graph.graph, &excluded)
-        };
-        let direct_cycles = graph::dependency_cycles(&direct_effective);
-        let direct_size_filtered = cycles::filter_cycles_by_size(direct_cycles, &config.cycles);
-        let direct_kept =
-            cycles::partition_dir_ignored(direct_size_filtered, &config.cycles.ignore_dirs).0;
-        cycles::collect_cyclic_files(&direct_kept)
+        let direct_effective =
+            build_direct_effective_graph(&parsed, &index, &config, &discovery_result, &excluded);
+        cycles::collect_cyclic_files_with_direct_fallback(&size_filtered, &direct_effective)
     } else {
         cycles::collect_cyclic_files(&size_filtered)
     };
