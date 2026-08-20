@@ -39,8 +39,8 @@ fn ancestor_only_listed_by_default() {
 }
 
 #[test]
-fn ancestor_only_excluded_with_flag() {
-    // With the flag, the ancestor-only cycle is NOT in the baseline.
+fn ancestor_only_unchanged_with_flag() {
+    // Direct subgraph is acyclic, so the flag restores the full SCC — same as default.
     let cfg = fixture_config("cyclic_ancestor_only");
     let parsed = run_json(&[
         "--config",
@@ -51,15 +51,13 @@ fn ancestor_only_excluded_with_flag() {
         "--ignore-derived-ancestor-init",
     ]);
     let files = parsed["cyclic_files"].as_array().unwrap();
-    assert!(
-        files.is_empty(),
-        "ancestor-only files should be excluded from baseline with flag"
-    );
+    let paths: Vec<&str> = files.iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(paths, vec!["src/alpha/__init__.py", "src/beta/helpers.py"]);
 }
 
 #[test]
-fn ancestor_only_excluded_via_config() {
-    // Config opt-in (no CLI flag) also excludes ancestor-only files.
+fn ancestor_only_unchanged_via_config() {
+    // Config opt-in (no CLI flag) applies the same direct-fallback baseline.
     let cfg = fixture_config("cyclic_ancestor_only_optin");
     let parsed = run_json(&[
         "--config",
@@ -69,10 +67,8 @@ fn ancestor_only_excluded_via_config() {
         "--dump-cyclic-files",
     ]);
     let files = parsed["cyclic_files"].as_array().unwrap();
-    assert!(
-        files.is_empty(),
-        "ancestor-only files should be excluded via config opt-in"
-    );
+    let paths: Vec<&str> = files.iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(paths, vec!["src/alpha/__init__.py", "src/beta/helpers.py"]);
 }
 
 #[test]
@@ -95,7 +91,7 @@ fn direct_init_still_listed_with_flag() {
 
 #[test]
 fn check_passes_when_ancestor_only_ignored() {
-    // With the flag and no cyclic-files, the direct-only baseline is empty == empty known list.
+    // With the flag and no cyclic-files, the direct-fallback baseline fails the check.
     let cfg = fixture_config("cyclic_ancestor_only");
     let output = run_raw(&[
         "--config",
@@ -106,10 +102,13 @@ fn check_passes_when_ancestor_only_ignored() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(
         output.status.code().unwrap(),
-        0,
-        "should exit 0: direct-only baseline empty == empty known list"
+        1,
+        "should exit 1: direct-fallback baseline differs from empty known list"
     );
-    assert!(stderr.contains("unchanged"), "stderr should say unchanged");
+    assert!(
+        stderr.contains("+ src/alpha/__init__.py"),
+        "stderr should list alpha/__init__.py as added"
+    );
 }
 
 #[test]
@@ -134,8 +133,8 @@ fn check_fails_ancestor_only_without_flag() {
 }
 
 #[test]
-fn show_reflects_direct_only() {
-    // --show-cyclic-files with the flag: cyclic_files key absent (empty -> omitted).
+fn show_reflects_direct_fallback_baseline() {
+    // --show-cyclic-files with the flag includes the direct-fallback baseline.
     let cfg = fixture_config("cyclic_ancestor_only");
     let parsed = run_json(&[
         "--config",
@@ -145,10 +144,8 @@ fn show_reflects_direct_only() {
         "--show-cyclic-files",
         "--ignore-derived-ancestor-init",
     ]);
-    assert!(
-        parsed.get("cyclic_files").is_none(),
-        "cyclic_files should be absent when direct-only baseline is empty"
-    );
+    let files = parsed["cyclic_files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
 }
 
 #[test]
@@ -212,9 +209,8 @@ fn noop_with_no_include_ancestor_init() {
 }
 
 #[test]
-fn check_fails_on_stale_list_after_enabling_flag() {
-    // Config lists both ancestor-only files (generated before the flag was enabled).
-    // Enabling the flag makes the computed baseline empty, so both entries are stale.
+fn check_passes_when_ancestor_only_listed() {
+    // When the known list already matches the direct-fallback baseline, check passes.
     let cfg = fixture_config("cyclic_ancestor_only_listed");
     let output = run_raw(&[
         "--config",
@@ -225,16 +221,8 @@ fn check_fails_on_stale_list_after_enabling_flag() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert_eq!(
         output.status.code().unwrap(),
-        1,
-        "should exit 1: stale entries in known list"
-    );
-    assert!(
-        stderr.contains("- src/alpha/__init__.py"),
-        "stderr should show alpha/__init__.py as removed"
-    );
-    assert!(
-        stderr.contains("- src/beta/helpers.py"),
-        "stderr should show beta/helpers.py as removed"
+        0,
+        "should exit 0 when known list matches direct-fallback baseline; stderr: {stderr}"
     );
 }
 
@@ -307,5 +295,54 @@ fn dump_human_includes_ignore_flag_via_config() {
     assert!(
         stdout.contains("ignore-derived-ancestor-init = true"),
         "config opt-in should surface the flag; got:\n{stdout}"
+    );
+}
+
+#[test]
+fn mixed_derived_restores_full_scc_via_config() {
+    let cfg = fixture_config("cyclic_mixed_derived");
+    let parsed = run_json(&[
+        "--config",
+        cfg.to_str().unwrap(),
+        "--format",
+        "json",
+        "--dump-cyclic-files",
+    ]);
+    assert_eq!(parsed["ignore_derived_ancestor_init"], true);
+    let files = parsed["cyclic_files"].as_array().unwrap();
+    let paths: Vec<&str> = files.iter().map(|v| v.as_str().unwrap()).collect();
+    assert_eq!(
+        paths,
+        vec![
+            "src/provider/__init__.py",
+            "src/provider/factory.py",
+            "src/provider/inplace/__init__.py",
+            "src/provider/inplace/hierarchy_source.py",
+            "src/tree/inplace_contract.py",
+        ]
+    );
+}
+
+#[test]
+fn mixed_derived_full_report_unchanged() {
+    let cfg = fixture_config("cyclic_mixed_derived");
+    let parsed = run_json(&["--config", cfg.to_str().unwrap(), "--format", "json"]);
+    let cycles = parsed["cycles"].as_array().unwrap();
+    assert_eq!(cycles.len(), 1, "expected one cycle in the normal report");
+    let paths: Vec<&str> = cycles[0]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            "src/provider/__init__.py",
+            "src/provider/factory.py",
+            "src/provider/inplace/__init__.py",
+            "src/provider/inplace/hierarchy_source.py",
+            "src/tree/inplace_contract.py",
+        ]
     );
 }

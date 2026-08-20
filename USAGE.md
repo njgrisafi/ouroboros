@@ -19,7 +19,7 @@ oboros [--config <FILE>] [--format human|json] [--trace <PATH>] [--package] [--d
 | `--check-max-cycles` | Fail (exit 1) if the number of detected cycles exceeds a budget. The budget comes from `--max-cycles` or `[cycles] max-cycles`. Exit 2 if no budget is set or if combined with `--check-cyclic-files`. Short-circuits the normal report. |
 | `--max-cycles <N>` | Budget on the number of cycles allowed (e.g. `9` = allow up to 9 cycles, fail on the 10th). Overrides `[cycles] max-cycles` in config. Only meaningful with `--check-max-cycles`. |
 | `--show-cyclic-files` | Include the cyclic-files set as an optional top-level `cyclic_files` array in the JSON report. No-op in human mode. |
-| `--ignore-derived-ancestor-init` | Exclude files that are cyclic only via a derived ancestor-`__init__.py` edge from the cyclic-files baseline. Overrides `[cycles] ignore-derived-ancestor-init` in config. Baseline-only; does not affect the normal cycle report. |
+| `--ignore-derived-ancestor-init` | Direct-fallback baseline: prefer direct-only SCC members within each cycle; when derived ancestor-init edges close the loop and the cycle has no direct-only representation, restore all SCC members from the normal report. Overrides `[cycles] ignore-derived-ancestor-init` in config. Baseline-only; does not affect the normal cycle report. |
 | `--include-self-ancestor-init` | Detect cycles that close through an eager parent `__init__.py`. Overrides `[resolve] include-self-ancestor-init` in config. See [`[resolve]` section](#resolve-section). |
 | `--local-imports` | Include imports nested inside functions, methods, classes, and control-flow blocks (deferred/"local" imports), not just top-level ones. Overrides `[parse] local-imports` in config. See [`[parse]` section](#parse-section). |
 | `--include-string-imports` | Also treat string literals that look like module paths as imports (ruff-style "string imports", e.g. `importlib.import_module("a.b.c")`). Respects `--local-imports` for whether strings nested inside functions/classes are scanned. Overrides `[parse] string-imports` in config. See [`[parse]` section](#parse-section). |
@@ -172,7 +172,7 @@ include-self-ancestor-init = true
 
 **Interaction with `include-ancestor-init`:** This option has no effect when `include-ancestor-init` is disabled. A warning is emitted if both are misconfigured.
 
-**Interaction with `ignore-derived-ancestor-init`:** Newly surfaced cycles are ancestor-init-derived and can be grandfathered via `ignore-derived-ancestor-init` or suppressed via `[[cycles.ignore]]` / `cyclic-files`.
+**Interaction with `ignore-derived-ancestor-init`:** Cycles surfaced only via ancestor-init edges may be wholly absent from a direct-only baseline; enabling the flag restores those SCCs in `cyclic-files`. Cycles already partially tracked stay unchanged.
 
 **`min-scc-size` caveat:** Surfaced cycles are subject to `[cycles] min-scc-size` (default 2). Newly-surfaced self-tree init cycles are typically 2 files, so `min-scc-size ≥ 3` will hide them. If the flag appears to have no effect, check this setting.
 
@@ -339,7 +339,7 @@ cyclic-files = [
 - **Dependent on `exclude`/`--exclude`** and `include-ancestor-init`: these change the analyzed graph.
 - **Dependent on `min-scc-size`/`max-scc-size`**: re-run `--dump-cyclic-files` after changing size bounds.
 
-> **Note:** In this initial version, files pulled into a cycle via ancestor-`__init__.py` edges (the `include-ancestor-init` mechanism) are counted. This is now available via `[cycles] ignore-derived-ancestor-init` (see below).
+> **Note:** Files pulled into a cycle via ancestor-`__init__.py` edges (the `include-ancestor-init` mechanism) are counted by default. Use `[cycles] ignore-derived-ancestor-init` to prefer a direct-only baseline while restoring wholly-untracked SCCs (see below).
 
 **Validation:** empty-string entries and absolute paths are rejected with an error.
 
@@ -391,7 +391,7 @@ Adds an optional top-level `cyclic_files` array to the JSON report. Omitted when
 
 #### `[cycles] ignore-derived-ancestor-init`
 
-When `true`, files that become cyclic **only** because of a derived ancestor-`__init__.py` edge are excluded from the cyclic-files baseline. Default: `false` (existing behavior).
+When `true`, the cyclic-files baseline prefers direct-only SCC members within each cycle. When derived ancestor-init edges close the loop and the cycle has no direct-only representation, all SCC members from the normal report are included. Default: `false` (collect all members from every detected cycle).
 
 ```toml
 [cycles]
@@ -400,13 +400,18 @@ ignore-derived-ancestor-init = true
 
 **Scope: baseline-only.** This option affects only `--dump-cyclic-files`, `--check-cyclic-files`, `--show-cyclic-files`, and the JSON/HTML `cyclic_files` list. The normal cycle report, `--strict`, JSON `cycles`, and HTML cycle table are unchanged.
 
-**Mechanism:** a file is counted in the baseline only if it participates in a cycle of the *direct-import-only* graph (ancestor-`__init__.py` edges removed). Cycles that close only through a derived ancestor edge disappear from the baseline; genuine direct `__init__.py` cycles are still counted.
+**Mechanism:** for each cycle in the normal report:
+
+1. **Already-tracked cycles** — if the direct-only subgraph (ancestor-init edges stripped) still has a cyclic SCC within those members, keep only those direct-only members; do not add more files.
+2. **Wholly-untracked cycles** — when the direct-only subgraph is acyclic, include all SCC members from the normal report.
+
+Compared to `ignore-derived-ancestor-init = false`, large SCCs that already have partial direct-only coverage stay unchanged; only wholly-untracked cycles gain members.
 
 **Interaction with `include-ancestor-init`:** this option is a no-op when `include-ancestor-init = false` (there are no derived edges to strip). In that case the tool prints a warning to stderr.
 
 **CLI:** `--ignore-derived-ancestor-init` forces the option on; there is no inverse flag (set `false` via config, which is the default).
 
-**Regenerate workflow:** enabling this option changes the computed baseline. A `cyclic-files` list generated without it will be flagged as stale by `--check-cyclic-files` (the now-ancestor-only files show as `- removed`). After enabling, re-run:
+**Regenerate workflow:** enabling this option changes the computed baseline. A `cyclic-files` list generated without it may be flagged as stale by `--check-cyclic-files` (restored wholly-untracked cycles show as `+ added`). After enabling, re-run:
 
 ```bash
 oboros --dump-cyclic-files --ignore-derived-ancestor-init
