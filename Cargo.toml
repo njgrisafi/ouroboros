@@ -6,3 +6,11 @@ resolver = "2"
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+
+# Replace unmaintained transitive crates that have no patched release.
+# `paste` is only used as a proc-macro by malachite-bigint. The `unic-*`
+# crates are only used by rustpython-parser's lexer for identifier checks.
+[patch.crates-io]
+paste = { path = "compat/paste" }
+unic-emoji-char = { path = "compat/unic-emoji-char" }
+unic-ucd-ident = { path = "compat/unic-ucd-ident" }

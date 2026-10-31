@@ -1,0 +1,14 @@
+[package]
+name = "paste"
+version = "1.0.15"
+edition = "2018"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Vendored pastey 0.2.3 under the paste package name"
+authors = ["Aditya Kumar <git@adityais.dev>", "David Tolnay <dtolnay@gmail.com>"]
+
+[lib]
+proc-macro = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }

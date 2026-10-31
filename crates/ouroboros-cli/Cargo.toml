@@ -10,7 +10,7 @@ path = "src/main.rs"
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4", features = ["derive"] }
-indicatif = "0.17"
+indicatif = "0.18"
 ouroboros-core = { path = "../ouroboros-core" }
 rayon = "1"
 rustc-hash = "2"
