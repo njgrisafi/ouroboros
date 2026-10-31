@@ -1,0 +1,9 @@
+[package]
+name = "unic-ucd-ident"
+version = "0.9.0"
+edition = "2021"
+publish = false
+description = "Drop-in stand-in for unmaintained unic-ucd-ident, backed by unicode-ident"
+
+[dependencies]
+unicode-ident = "1"
